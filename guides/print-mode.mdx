@@ -1,7 +1,7 @@
 ---
-title: "Non-Interactive Print Mode for Scripts and CI"
+title: "Tau Print Mode: Scripting, Pipes, and CI Automation"
 sidebarTitle: "Print Mode"
-description: "Run Tau headlessly with -p or --mode for scripts, pipes, and CI. Choose text, JSON, transcript, or RPC output formats."
+description: "Run Tau headlessly for scripts and CI — use -p or --mode to choose text, JSON, or transcript output and pipe stdin into your prompts."
 ---
 
 Print mode runs a single prompt without the interactive TUI and writes the result directly to the terminal or a pipe. It uses the same full coding-session environment as the TUI — the same tools, project context, and session storage — so turns are saved under `~/.tau/sessions/` and can be resumed later. This makes it the right choice for scripts, pipelines, CI automation, and one-off questions.
@@ -46,14 +46,11 @@ Use `--mode` to choose how results are written. Passing `--mode` alone also swit
     tau -p --mode transcript "review the current changes"
     ```
   </Tab>
-  <Tab title="rpc">
-    A persistent JSONL RPC protocol session, compatible with Pi's RPC mode. Reads commands from stdin; does not accept a positional prompt.
-
-    ```bash
-    tau --mode rpc
-    ```
-  </Tab>
 </Tabs>
+
+<Note>
+`--mode rpc` launches a persistent JSONL RPC server that reads commands from stdin — it is not a print-mode output format and does not accept a positional prompt.
+</Note>
 
 ## Piping Stdin
 

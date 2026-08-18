@@ -1,7 +1,7 @@
 ---
 title: "Project Instructions: AGENTS.md, SYSTEM.md, and Resources"
 sidebarTitle: "Project Instructions"
-description: "Give Tau standing project context via AGENTS.md, .tau/ and .agents/ resource directories, SYSTEM.md, and APPEND_SYSTEM.md — all loaded after project trust."
+description: "Give Tau standing project context via AGENTS.md, .tau/ and .agents/ resource directories, SYSTEM.md, and APPEND_SYSTEM.md — loaded after project trust."
 ---
 
 Tau discovers instruction files and resource directories automatically and includes them in the system prompt for every turn. This lets you give the agent durable, project-specific context — conventions to follow, commands to run, things to avoid — without repeating yourself every session.
@@ -132,9 +132,10 @@ You can supply system prompt content directly from the command line, bypassing t
 ```bash
 tau --system-prompt "You are a senior Go engineer. Always prefer stdlib."
 tau --append-system-prompt "Never modify files in the vendor/ directory."
+tau --append-system-prompt path/to/extra-context.md --append-system-prompt "Also: keep changes minimal."
 ```
 
-`--system-prompt` replaces the entire system prompt (equivalent to `SYSTEM.md` but supplied on the command line). `--append-system-prompt` appends text to the system prompt (equivalent to `APPEND_SYSTEM.md`). These flags take effect for the duration of the invocation and are not saved.
+`--system-prompt TEXT_OR_PATH` replaces the entire system prompt (equivalent to `SYSTEM.md` but supplied on the command line). `--append-system-prompt TEXT_OR_PATH` appends text or a UTF-8 file to the system prompt (equivalent to `APPEND_SYSTEM.md`) and can be repeated to append multiple blocks in order. These flags take effect for the duration of the invocation and are not saved.
 
 ## Skills and prompt templates
 

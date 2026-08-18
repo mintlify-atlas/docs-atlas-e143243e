@@ -1,7 +1,7 @@
 ---
-title: "Building Tau Extensions with the Full Python API"
+title: "Tau Extensions: Custom Tools, Commands, Hooks, and UI"
 sidebarTitle: "Extensions"
-description: "Extend Tau with plain Python: register custom tools, slash commands, lifecycle hooks, UI dialogs, and custom message rendering."
+description: "Extend Tau with plain Python — add tools, slash commands, event hooks, UI dialogs, and custom message rendering to your session."
 ---
 
 Extensions are Python modules that customize a running Tau session. They live outside the core codebase and are loaded at startup — or reloaded live with `/reload` — giving you a stable, versioned seam for adding tools, slash commands, system-prompt guidelines, event observers, input/tool interceptors, UI dialogs, and rich message rendering. Every extension defines a single `setup(tau)` entry point that receives the full extension API object.
@@ -219,10 +219,12 @@ Lifecycle hooks fire for session and input events. Unlike observation events, so
 | `input` | `InputEvent(text)` | `InputHookResult(action, text, message)` |
 | `tool_call` | `ToolCallHookEvent(tool_name, arguments)` | `ToolCallHookResult(block, reason, arguments)` |
 | `tool_result` | `ToolResultHookEvent(tool_name, arguments, result)` | `ToolResultHookResult(content, details)` |
+| `project_trust` | `ProjectTrustEvent(cwd, mode, has_ui, categories, counts)` | `ExtensionTrustResult(decision, remember)` |
 
 **`session_start`** fires once the host frontend is attached, so handlers can call `tau.notify(...)` or open dialogs and they will actually be seen. The `reason` field is one of `"startup"`, `"reload"`, `"new"`, `"resume"`, or `"branch"`.
 
 **`input`** runs on the raw prompt text before skill/template expansion:
+- `action="continue"` leaves the text unchanged (default — pass-through)
 - `action="transform"` rewrites the text (transforms chain across handlers)
 - `action="handled"` consumes the input without an agent run; `message` is shown as a notification
 
@@ -266,6 +268,8 @@ def setup(tau: ExtensionAPI) -> None:
 Setting `block=True` prevents execution and reports `reason` to the model. Returning `arguments` rewrites the call. A crashing `tool_call` handler **blocks the tool** (fail-safe).
 
 **`tool_result`** can rewrite a result's text `content` or `details` after execution.
+
+**`project_trust`** fires before a project decision is made, letting eligible extensions approve or decline loading project inputs. Only built-in, user-global, and explicit `-e` extensions may handle this event — project extensions cannot approve themselves. The payload carries the canonical `cwd`, `mode` (`"interactive"` or `"headless"`), `has_ui`, and bounded `categories`/`counts` of detected resources (never protected file contents). Return `ExtensionTrustResult(decision="approve" | "decline" | "defer", remember=False)` — the first decisive result wins; errors safely defer; `remember=True` saves the decision for the exact cwd.
 
 ## UI Dialogs
 

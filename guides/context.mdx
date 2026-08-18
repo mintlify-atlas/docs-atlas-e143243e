@@ -95,11 +95,11 @@ Different models support different subsets of thinking levels. For example:
 - **Claude Opus 5** with adaptive thinking maps `xhigh` to Anthropic's maximum effort and sends an explicit disabled-thinking request for `off`.
 - **DeepSeek V4 Pro** supports only `off`, `high`, and `xhigh` (mapped to `none`, `high`, and `max` respectively on the wire).
 
-Picking an unsupported level explicitly — via `/think` or the thinking picker — shows an error listing the available modes.
+Picking an unsupported level explicitly via the **Shift+Tab** cycle shows an error listing the available modes.
 
-### Thinking level picker
+### Per-session persistence
 
-You can also select a thinking level through the `/session` command picker or by using the `/think` slash command followed by a level name. Tau stores your per-model thinking preference so it is restored automatically the next time you start a session with that model.
+Tau stores your per-model thinking preference so it is restored automatically the next time you start a session with that model. Thinking mode is keyboard-driven — use **Shift+Tab** to cycle levels and **Ctrl+T** to toggle visibility; there is no `/think` slash command.
 
 ## Overflow handling
 

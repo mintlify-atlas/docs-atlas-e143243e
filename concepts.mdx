@@ -1,5 +1,5 @@
 ---
-title: "Core Concepts: Architecture, Events, and Sessions"
+title: "Core Concepts: Architecture, Events, Tools, and Sessions"
 sidebarTitle: "Concepts"
 description: "Understand Tau's three-layer architecture, typed event stream, AgentHarness library API, durable sessions, tools, and the extensions system."
 ---
@@ -196,6 +196,7 @@ class AgentTool:
     execute_fn: ToolExecutor              # async callable
     prompt_snippet: str | None = None     # injected into system prompt
     prompt_guidelines: tuple[str, ...] = ()
+    prepare_arguments: ToolArgumentPreparer | None = None
     execution_mode: ToolExecutionMode = "parallel"  # "sequential" | "parallel"
     render_call: ToolCallRenderer | None = None
     render_result: ToolResultRenderer | None = None

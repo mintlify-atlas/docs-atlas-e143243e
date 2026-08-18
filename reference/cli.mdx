@@ -1,5 +1,5 @@
 ---
-title: "Complete CLI Reference for the Tau Coding Agent"
+title: "Tau CLI Reference: All Commands, Flags, and Options"
 sidebarTitle: "CLI"
 description: "Every Tau command, flag, and environment variable — from launching the TUI to headless print mode, provider setup, and session export."
 ---
@@ -53,6 +53,7 @@ These flags apply to `tau` (both TUI and print mode) and are placed before the p
 | `-a, --approve` | flag | off | Trust protected project inputs for this invocation only |
 | `-na, --no-approve` | flag | off | Decline protected project inputs for this invocation only |
 | `-v, --version` | flag | — | Print Tau's version and exit |
+| `--export` | flag | off | Export the given session id or JSONL path; mirrors `tau export` (cannot be combined with `--print` or `--mode`) |
 
 <Note>
   `--approve` and `--no-approve` are mutually exclusive and never write to the trust store. See [Project trust](/guides/project-trust) for interactive scopes, headless defaults, and protected resources.

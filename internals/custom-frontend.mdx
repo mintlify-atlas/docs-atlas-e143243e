@@ -43,11 +43,12 @@ from tau_agent import (
 from tau_agent.messages import AssistantMessage, TextContent
 
 # tau_ai provides the ModelProvider implementation for each vendor.
-# Import the provider you want — here we use a hypothetical OpenAI provider.
-from tau_ai.providers.openai import OpenAIProvider  # adjust to actual import
+# OpenAI-compatible providers (OpenAI, Hugging Face, OpenRouter, …) use
+# OpenAICompatibleProvider; Anthropic has its own AnthropicProvider class.
+from tau_ai import OpenAICompatibleProvider, OpenAICompatibleConfig
 
 async def main() -> None:
-    provider = OpenAIProvider(api_key="sk-...")
+    provider = OpenAICompatibleProvider(OpenAICompatibleConfig(api_key="sk-..."))
     harness = AgentHarness(
         AgentHarnessConfig(
             provider=provider,
@@ -93,26 +94,24 @@ asyncio.run(main())
 `CodingSession` (from `tau_coding`) wraps the harness with the full coding-agent environment: provider/model loading from `~/.tau/`, built-in `read`, `write`, `edit`, and `bash` tools, project instruction discovery, skill expansion, and durable JSONL sessions. Build against `CodingSession` when you want a full coding-agent frontend without reimplementing provider config or tool loading.
 
 ```python
-import asyncio
-from tau_coding.session import CodingSession
-from tau_coding.events import CodingSessionEvent
+from tau_coding.session import CodingSession, CodingSessionConfig
 from tau_agent import MessageUpdateEvent, AgentEndEvent
 from tau_agent.messages import AssistantMessage, TextContent
 
-async def main() -> None:
-    # CodingSession discovers providers, models, and tools from ~/.tau/
-    async with CodingSession.create(cwd="/path/to/project") as session:
-        async for event in session.prompt("Summarise this project."):
-            if isinstance(event, MessageUpdateEvent):
-                msg = event.message
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextContent):
-                            print(block.text, end="", flush=True)
-            elif isinstance(event, AgentEndEvent):
-                print(f"\n■ done")
-
-asyncio.run(main())
+# CodingSession is constructed via CodingSession.load(config).
+# CodingSessionConfig requires a live provider, a storage backend, a
+# session_manager, and other runtime settings — see tau_coding.cli for the
+# reference construction. Once you have a session:
+async def run_session(session: CodingSession) -> None:
+    async for event in session.prompt("Summarise this project."):
+        if isinstance(event, MessageUpdateEvent):
+            msg = event.message
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextContent):
+                        print(block.text, end="", flush=True)
+        elif isinstance(event, AgentEndEvent):
+            print(f"\n■ done")
 ```
 
 The `CodingSessionEvent` stream is a superset of `AgentEvent`: it extends the portable events with session-level events like `agent_settled`, queue updates, compaction signals, and session-info changes. Render from these events — never from raw provider chunks or internal session state.
