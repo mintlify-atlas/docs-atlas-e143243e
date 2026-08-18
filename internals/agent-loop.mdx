@@ -1,0 +1,295 @@
+---
+title: "The Agent Loop: How Prompts Become Events and Tool Calls"
+sidebarTitle: "Agent Loop"
+description: "How a user prompt flows through AgentHarness and run_agent_loop, the full set of AgentEvent types, tool execution, thinking content, and cancellation."
+---
+
+The **agent loop** is the small, reusable engine at Tau's center. It turns a user message, a list of tools, and a model selection into a flow of typed progress events. Everything a frontend needs to render — streaming text, tool calls, tool results, errors — arrives as one of ten provider-neutral event types. You never touch a raw provider chunk.
+
+## From prompt to events
+
+When you call `harness.prompt(text)`, the call chain is:
+
+<Steps>
+  <Step title="AgentHarness.prompt()">
+    Wraps the text in a `UserMessage`, asserts the harness is not already running, sets the cancellation token, and delegates to `run_agent_loop`.
+  </Step>
+  <Step title="run_agent_loop streams the provider">
+    Emits `AgentStartEvent` and `TurnStartEvent`, then opens an async stream to the configured provider through `tau_ai`. Provider chunks are translated to `MessageStartEvent` / `MessageUpdateEvent` / `MessageEndEvent` as the assistant response builds up.
+  </Step>
+  <Step title="Tool calls are executed">
+    Once the assistant message is complete, the loop iterates its `tool_calls` list. Each call emits `ToolExecutionStartEvent`, optional `ToolExecutionUpdateEvent` progress events, and `ToolExecutionEndEvent` with the final result — followed immediately by `MessageStartEvent` / `MessageEndEvent` wrapping the `ToolResultMessage`.
+  </Step>
+  <Step title="The loop repeats">
+    The tool results are appended to the transcript and the loop goes back to step 2. When the assistant produces a response with no tool calls, `TurnEndEvent` and `AgentEndEvent` are emitted and the stream closes.
+  </Step>
+</Steps>
+
+## The async generator model
+
+Every caller consumes the same async generator interface:
+
+```python
+from tau_agent import AgentHarness, AgentHarnessConfig
+
+harness = AgentHarness(
+    AgentHarnessConfig(
+        provider=provider,
+        model="my-model",
+        system="You are a helpful coding agent.",
+        tools=tools,
+    )
+)
+
+async for event in harness.prompt("Explain this package"):
+    print(event.type, event)
+```
+
+`harness.prompt()` returns an `AsyncIterator[AgentEvent]`. The caller drives the iteration; the loop yields events as they are produced. There is no background thread and no internal queue — the `async for` loop is the scheduler.
+
+## All event types
+
+All ten event types are defined in `tau_agent.events` and exported from `tau_agent`:
+
+<AccordionGroup>
+  <Accordion title="AgentStartEvent / AgentEndEvent">
+    Bracket the entire run. `AgentStartEvent` is always the first event; `AgentEndEvent` is always the last. `AgentEndEvent` carries a `messages` list of every new message produced during the run (prompts, assistant turns, tool results).
+
+    ```python
+    class AgentStartEvent(WireModel):
+        type: Literal["agent_start"] = "agent_start"
+
+    class AgentEndEvent(WireModel):
+        type: Literal["agent_end"] = "agent_end"
+        messages: list[AgentMessage] = Field(default_factory=list)
+    ```
+  </Accordion>
+  <Accordion title="TurnStartEvent / TurnEndEvent">
+    Bracket one assistant response and all its tool results. A multi-tool run emits multiple turn pairs. `TurnEndEvent` carries the final `AssistantMessage` for that turn and the list of `ToolResultMessage` objects produced by its tool calls.
+
+    ```python
+    class TurnStartEvent(WireModel):
+        type: Literal["turn_start"] = "turn_start"
+
+    class TurnEndEvent(WireModel):
+        type: Literal["turn_end"] = "turn_end"
+        message: AgentMessage
+        tool_results: list[ToolResultMessage] = Field(default_factory=list)
+    ```
+  </Accordion>
+  <Accordion title="MessageStartEvent / MessageUpdateEvent / MessageEndEvent">
+    Track a message's lifecycle. `MessageStartEvent` fires when streaming begins; `MessageUpdateEvent` fires for each chunk with the in-progress `AssistantMessage` and a nested `AssistantMessageEvent`; `MessageEndEvent` fires with the finalized message.
+
+    ```python
+    class MessageStartEvent(WireModel):
+        type: Literal["message_start"] = "message_start"
+        message: AgentMessage
+
+    class MessageUpdateEvent(WireModel):
+        type: Literal["message_update"] = "message_update"
+        message: AgentMessage
+        assistant_message_event: AssistantMessageEvent
+
+    class MessageEndEvent(WireModel):
+        type: Literal["message_end"] = "message_end"
+        message: AgentMessage
+    ```
+
+    The `AssistantMessage` on `MessageEndEvent` is authoritative — it carries the complete, ordered content blocks (text, thinking, tool calls) that are persisted and replayed. The nested update events on `MessageUpdateEvent` provide responsive rendering during streaming.
+  </Accordion>
+  <Accordion title="ToolExecutionStartEvent / ToolExecutionUpdateEvent / ToolExecutionEndEvent">
+    Track one tool call. `ToolExecutionStartEvent` fires immediately with the call's id, name, and arguments. Optional `ToolExecutionUpdateEvent` events carry partial results for tools that report streaming progress. `ToolExecutionEndEvent` carries the final result and an `is_error` flag.
+
+    ```python
+    class ToolExecutionStartEvent(WireModel):
+        type: Literal["tool_execution_start"] = "tool_execution_start"
+        tool_call_id: str
+        tool_name: str
+        args: dict[str, JSONValue] = Field(default_factory=dict)
+
+    class ToolExecutionUpdateEvent(WireModel):
+        type: Literal["tool_execution_update"] = "tool_execution_update"
+        tool_call_id: str
+        tool_name: str
+        args: dict[str, JSONValue] = Field(default_factory=dict)
+        partial_result: AgentToolResult
+
+    class ToolExecutionEndEvent(WireModel):
+        type: Literal["tool_execution_end"] = "tool_execution_end"
+        tool_call_id: str
+        tool_name: str
+        result: AgentToolResult
+        is_error: bool
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Iterating events with type discrimination
+
+Use `isinstance` checks or match on `event.type` — both work because every event carries a `Literal` discriminator field:
+
+```python
+from tau_agent import (
+    AgentStartEvent, AgentEndEvent,
+    TurnStartEvent, TurnEndEvent,
+    MessageStartEvent, MessageUpdateEvent, MessageEndEvent,
+    ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExecutionEndEvent,
+)
+from tau_agent.messages import AssistantMessage, ThinkingContent, TextContent
+
+async for event in harness.prompt("What files are in this directory?"):
+    if isinstance(event, AgentStartEvent):
+        print("▶ run started")
+
+    elif isinstance(event, MessageUpdateEvent):
+        # Stream text content as it arrives
+        msg = event.message
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, TextContent):
+                    print(block.text, end="", flush=True)
+
+    elif isinstance(event, ToolExecutionStartEvent):
+        print(f"\n⚙ calling {event.tool_name}({event.args})")
+
+    elif isinstance(event, ToolExecutionUpdateEvent):
+        print(f"  … {event.partial_result.text}", end="\r")
+
+    elif isinstance(event, ToolExecutionEndEvent):
+        status = "✗" if event.is_error else "✓"
+        print(f"  {status} {event.tool_name} done")
+
+    elif isinstance(event, AgentEndEvent):
+        print(f"\n■ run ended — {len(event.messages)} new messages")
+```
+
+## Thinking content
+
+When the model produces extended thinking, `ThinkingContent` blocks appear in the assistant message alongside `TextContent` and `ToolCall` blocks. The content list is ordered as the model emitted it.
+
+```python
+from tau_agent.messages import AssistantMessage, ThinkingContent, TextContent, ToolCall
+
+async for event in harness.prompt("Refactor this module"):
+    if isinstance(event, MessageEndEvent):
+        msg = event.message
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                match block:
+                    case ThinkingContent(thinking=t):
+                        print(f"[thinking] {t[:80]}…")
+                    case TextContent(text=t):
+                        print(f"[text] {t}")
+                    case ToolCall(name=n, arguments=a):
+                        print(f"[tool call] {n}({a})")
+```
+
+<Note>
+  `ThinkingContent.redacted` is `True` when the provider encrypted the thinking block. The `thinking` field will be empty in that case, but the `thinking_signature` is preserved for provider continuity.
+</Note>
+
+## The tool executor pattern
+
+Tools are defined with `AgentTool`, a frozen dataclass that bundles a JSON schema with an async executor:
+
+```python
+from tau_agent import AgentTool, AgentToolResult
+from tau_agent.tools import ToolCancellationToken, ToolUpdateCallback
+from tau_agent.messages import TextContent
+from collections.abc import Mapping
+from tau_agent.types import JSONValue
+
+
+async def read_file(
+    tool_call_id: str,
+    arguments: Mapping[str, JSONValue],
+    signal: ToolCancellationToken | None = None,
+    on_update: ToolUpdateCallback | None = None,
+) -> AgentToolResult:
+    path = str(arguments["path"])
+    if signal and signal.is_cancelled():
+        return AgentToolResult(content=[TextContent(text="Cancelled")])
+    text = open(path).read()
+    return AgentToolResult(content=[TextContent(text=text)])
+
+
+read_tool = AgentTool(
+    name="read_file",
+    label="Read file",
+    description="Read the contents of a file.",
+    parameters={
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "File path to read"}},
+        "required": ["path"],
+    },
+    execute_fn=read_file,
+)
+```
+
+The `on_update` callback lets a tool emit intermediate `AgentToolResult` objects. The loop emits a `ToolExecutionUpdateEvent` for each call, enabling progress rendering while the tool runs. The `signal` argument is a `ToolCancellationToken` — call `signal.is_cancelled()` to honour mid-execution cancellation.
+
+## Cancellation
+
+Call `harness.cancel()` at any time. It sets the `SimpleCancellationToken` that was passed into the loop, causing the next cancellation-aware checkpoint to stop early. Any tool whose executor checks `signal.is_cancelled()` will also stop. Keep consuming the event stream after calling `cancel()` — the loop emits a clean `AgentEndEvent` before closing.
+
+```python
+import asyncio
+from tau_agent import AgentHarness
+
+async def run_with_timeout(harness: AgentHarness, prompt: str, timeout: float) -> None:
+    async def cancel_after() -> None:
+        await asyncio.sleep(timeout)
+        harness.cancel()
+
+    asyncio.create_task(cancel_after())
+    async for event in harness.prompt(prompt):
+        print(event.type)
+```
+
+`SimpleCancellationToken` also implements the `ToolCancellationToken` protocol, so it can be passed directly to any tool executor:
+
+```python
+from tau_agent import SimpleCancellationToken
+
+token = SimpleCancellationToken()
+token.cancel()
+print(token.is_cancelled())  # True
+```
+
+## Steering and follow-ups with QueuedMessages
+
+If a run is already active, you cannot call `harness.prompt()` — it raises `RuntimeError`. Use the queue methods instead:
+
+```python
+# Inject a steering message mid-run (inserted before the next turn)
+queued = harness.steer("Actually, focus only on the tests directory.")
+
+# Queue a follow-up that runs after the current run would normally stop
+queued = harness.follow_up("Now summarise what changed.")
+
+print(f"{queued.count} messages queued")
+```
+
+`QueuedMessages` is a named pair of tuples:
+
+```python
+from tau_agent import QueuedMessages
+
+queued: QueuedMessages = harness.queued_messages
+print(queued.steering)   # tuple[AgentMessage, ...]
+print(queued.follow_up)  # tuple[AgentMessage, ...]
+print(queued.count)      # total pending
+```
+
+`CodingSession` in `tau_coding` exposes the same concept through a `streaming_behavior` parameter on `session.prompt()`, adding `"steer"` and `"follow_up"` modes that map to these harness calls.
+
+## What the loop does not own
+
+The loop has no knowledge of:
+- CLI arguments or `tau_coding` config paths
+- Textual widgets or Rich markup
+- Session file locations or JSONL persistence
+- Slash commands or skill expansion
+- Provider authentication or catalog loading
+
+Those all belong to `tau_coding`. Keeping them out is what makes the loop reusable across every frontend and test harness.

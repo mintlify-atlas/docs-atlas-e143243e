@@ -1,20 +1,88 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Tau: Minimalist Terminal Coding Agent"
+sidebarTitle: "Home"
+description: "Tau is a small, readable coding agent that lives in your terminal. Read files, edit code, run commands, and maintain durable session history — powered by any AI provider."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Tau is a terminal coding agent you can run today. Type a request — "explain this repo", "add tests", "fix this stack trace" — and Tau reads files, edits code, runs shell commands, and streams what it's doing. Sessions are durable, resumable, and branching. Every part of the codebase is designed to be read.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Tau, connect a provider, and run your first coding session in minutes.
+  </Card>
+  <Card title="Core Concepts" icon="lightbulb" href="/concepts">
+    Understand Tau's three-layer architecture, event model, and session primitives.
+  </Card>
+  <Card title="Providers & Models" icon="cloud" href="/guides/providers-and-models">
+    Connect OpenAI, Anthropic, Hugging Face, GitHub Copilot, or a local model.
+  </Card>
+  <Card title="Extensions" icon="puzzle-piece" href="/guides/extensions">
+    Add custom tools, slash commands, and UI dialogs with plain Python.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
+## What Tau can do
+
+Tau ships with everything you need to run an AI coding session from your terminal:
+
+<CardGroup cols={2}>
+  <Card title="Interactive TUI" icon="terminal" href="/guides/tui">
+    A full Textual-based terminal interface with autocomplete, session sidebar, and theming.
+  </Card>
+  <Card title="Print Mode" icon="print" href="/guides/print-mode">
+    Non-interactive one-shot mode for scripts, CI, and piped input.
+  </Card>
+  <Card title="Session Management" icon="clock-rotate-left" href="/guides/sessions">
+    Durable JSONL sessions with resume, branching, compaction, and HTML export.
+  </Card>
+  <Card title="Project Instructions" icon="file-lines" href="/guides/project-instructions">
+    Load context from AGENTS.md and .tau/ project resources automatically.
+  </Card>
+  <Card title="Skills & Prompts" icon="wand-magic-sparkles" href="/guides/skills-and-prompts">
+    Reusable prompt templates and named skill invocations.
+  </Card>
+  <Card title="Project Trust" icon="shield-check" href="/guides/project-trust">
+    Fine-grained control over which project inputs are loaded.
+  </Card>
+</CardGroup>
+
+## Use as a library
+
+Tau's agent core (`tau_agent`) is a standalone Python package. Use `AgentHarness` to drive an LLM loop in your own code — no CLI, TUI, or file system required.
+
+```python
+from tau_agent import AgentHarness, AgentHarnessConfig
+
+harness = AgentHarness(
+    AgentHarnessConfig(
+        provider=provider,
+        model="my-model",
+        system="You are a helpful coding agent.",
+        tools=tools,
+    )
+)
+
+async for event in harness.prompt("Explain this package"):
+    print(event)
+```
+
+<Card title="Architecture & Internals" icon="diagram-project" href="/internals/architecture">
+  Learn how tau_ai, tau_agent, and tau_coding are layered — and how to build your own frontend.
 </Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+
+## Reference
+
+<CardGroup cols={2}>
+  <Card title="CLI Reference" icon="square-terminal" href="/reference/cli">
+    Every command, subcommand, and flag for the tau command.
+  </Card>
+  <Card title="Slash Commands" icon="slash" href="/reference/slash-commands">
+    In-session commands for model switching, session management, and more.
+  </Card>
+  <Card title="Configuration Files" icon="gear" href="/reference/configuration">
+    Tau home directory layout, provider config, TUI settings, and shell config.
+  </Card>
+  <Card title="Built-in Tools" icon="wrench" href="/reference/tools">
+    The read, write, edit, and bash tools available to the agent.
+  </Card>
+</CardGroup>

@@ -1,0 +1,437 @@
+---
+title: "Tau Configuration Files and Directory Layout"
+sidebarTitle: "Configuration"
+description: "Complete reference for Tau's config files: ~/.tau/ layout, catalog.toml, providers.json, settings.json, tui.json, system prompts, and network proxies."
+---
+
+Tau keeps all durable state in `~/.tau/` and reads project-local resources from the current working directory. This page documents every file format, field, and precedence rule used by those locations.
+
+## Directory layout
+
+The `~/.tau/` directory is the single source of truth for user-level configuration, session transcripts, credentials, and themes.
+
+```text
+~/.tau/
+├── catalog.toml          # optional provider/model catalog overlay
+├── providers.json        # provider and model runtime preferences
+├── credentials.json      # saved API keys / OAuth tokens (0600, atomic writes)
+├── settings.json         # general settings (trust default, shell prefix)
+├── trust.json            # versioned project-input trust decisions (managed by Tau)
+├── tui.json              # TUI theme, keybindings, and layout
+├── sessions/             # saved sessions, one subdirectory per project
+├── skills/               # user-level skills
+├── prompts/              # user-level prompt templates
+├── themes/               # user-level TUI themes
+├── SYSTEM.md             # optional replacement system-prompt base
+├── APPEND_SYSTEM.md      # optional appended system-prompt instructions
+├── AGENTS.md             # global project instructions
+├── cache/                # startup update-check cache (update-check.json)
+└── logs/                 # diagnostics
+```
+
+Tau also discovers user-level `.agents` resources from `~/.agents/skills/`, `~/.agents/prompts/`, and `~/.agents/AGENTS.md`.
+
+<Tip>
+Startup update checks cache their latest PyPI result in `~/.tau/cache/update-check.json` and refresh at most once per day. Set `TAU_NO_UPDATE_CHECK=1` to disable. Tau also skips the check automatically when the `CI` environment variable is set.
+</Tip>
+
+## Sessions storage
+
+Each working directory gets its own subdirectory inside `~/.tau/sessions/`:
+
+```text
+~/.tau/sessions/<cleaned-path>-<short-hash>/
+```
+
+Transcripts are append-only JSONL files preserving messages, model changes, and the active leaf of the session tree. Metadata is indexed per project.
+
+---
+
+## catalog.toml
+
+Tau separates provider metadata from runtime preferences. The built-in catalog ships at `src/tau_coding/data/catalog.toml` inside the package. User overlays live at `~/.tau/catalog.toml`. There is no project-level catalog path — cloning a repository cannot redirect a provider's `base_url` or credentials to an unexpected service.
+
+### Schema
+
+```toml
+schema_version = 1
+
+[[providers]]
+name = "local-gateway"
+display_name = "Local Gateway"
+kind = "openai-compatible"
+base_url = "http://localhost:11434/v1"
+api_key_env = "LOCAL_GATEWAY_API_KEY"
+credential_name = "local-gateway"
+models = ["qwen-coder"]
+default_model = "qwen-coder"
+docs_url = "https://example.test/local-gateway"
+
+[providers.context_windows]
+qwen-coder = 64000
+```
+
+### Top-level fields
+
+<ParamField path="schema_version" type="integer" required>
+  Must be `1`. Tau rejects unsupported versions rather than silently misinterpreting the file.
+</ParamField>
+
+<ParamField path="[[providers]]" type="array of tables" required>
+  One entry per provider. Each entry uses the fields below.
+</ParamField>
+
+### Per-provider fields
+
+<ParamField path="name" type="string" required>
+  Unique internal identifier used to reference this provider in `providers.json` and CLI flags. Matches a built-in entry to create an overlay.
+</ParamField>
+
+<ParamField path="display_name" type="string">
+  Human-readable label shown in the TUI and command output.
+</ParamField>
+
+<ParamField path="kind" type="string" required>
+  Provider transport kind. Accepted values: `openai-compatible`, `anthropic`, `openai-codex`. Use `openai-compatible` for most local or third-party services.
+</ParamField>
+
+<ParamField path="base_url" type="string" required>
+  Base URL for API requests.
+</ParamField>
+
+<ParamField path="api_key_env" type="string">
+  Environment variable name that holds the API key. Resolution order: stored credential in `credentials.json`, then this env var.
+</ParamField>
+
+<ParamField path="credential_name" type="string">
+  Key used to look up the stored credential in `credentials.json`.
+</ParamField>
+
+<ParamField path="models" type="array of strings">
+  List of model IDs this provider supports. Add custom or local model names here before using them as defaults, CLI selections, or scoped models.
+</ParamField>
+
+<ParamField path="default_model" type="string">
+  Default model for new sessions. Must appear in `models`.
+</ParamField>
+
+<ParamField path="docs_url" type="string">
+  URL to the provider's documentation, shown in the TUI.
+</ParamField>
+
+<ParamField path="thinking_levels" type="array of strings">
+  Supported thinking-intensity labels (e.g. `["off", "low", "medium", "high"]`).
+</ParamField>
+
+<ParamField path="thinking_default" type="string">
+  Default thinking level for new sessions.
+</ParamField>
+
+<ParamField path="thinking_models" type="array of strings">
+  Subset of `models` that support thinking. When present, forms a group with the other `thinking_*` fields — replacing them as a group when `thinking_levels` is in the overlay.
+</ParamField>
+
+<ParamField path="thinking_parameter" type="string">
+  API parameter name for thinking intensity. Accepted values: `"reasoning_effort"`, `"reasoning.effort"`, or `"anthropic.thinking"`.
+</ParamField>
+
+<ParamField path="removed_models" type="array of strings">
+  Additive tombstone list. Tau removes matching entries from the model list, metadata, context-window map, and defaults after all merges. Prevents stale overlays from restoring deprecated models.
+</ParamField>
+
+### context_windows table
+
+```toml
+[providers.context_windows]
+qwen-coder = 64000
+```
+
+Maps model IDs to integer context-window sizes in tokens. Values must be positive integers. Merged with the built-in catalog when the provider name matches.
+
+### model_metadata table
+
+```toml
+[providers.model_metadata."long-context-model"]
+cost = { input = 0.3, output = 1.2, cacheRead = 0.06, cacheWrite = 0 }
+cost_tiers = [
+  { max_input_tokens = 512000, input = 0.3, output = 1.2, cacheRead = 0.06, cacheWrite = 0 },
+  { input = 0.6, output = 2.4, cacheRead = 0.12, cacheWrite = 0 },
+]
+```
+
+All rates are **per million tokens**. `cacheWrite` is the 5-minute cache-write rate. An optional `cacheWrite1h` key specifies Anthropic's 1-hour TTL write rate (falls back to `cacheWrite` when absent).
+
+For `cost_tiers`: limits are inclusive and must increase strictly; the final tier must omit `max_input_tokens` so every valid input size has a rate. Callers that understand tiers select the first tier whose limit includes the input-token count. Older callers continue to see `cost` as the base rate.
+
+### Merge rules for overlays
+
+When a user catalog entry uses the same `name` as a built-in provider:
+
+- Scalar fields (e.g. `base_url`, `default_model`) replace the built-in value.
+- `models` are merged with user models listed first.
+- `context_windows` are merged.
+- Provider-level `compat` is merged key by key; model-level `compat` wins over provider-level.
+- Model metadata is merged by model; `headers`, `compat`, and `thinking_level_map` are merged, while other fields (including the complete `cost_tiers` array) replace the built-in value.
+
+<Warning>
+Invalid catalog files fail loudly. Tau rejects unknown keys, empty required strings, empty model names, unsupported provider kinds, default models not listed in `models`, `context_windows` or `thinking` entries for unknown models, and non-positive or non-integer context-window values.
+</Warning>
+
+### OpenAI prompt-cache compat keys
+
+Tau enables OpenAI cache affinity automatically only for `api.openai.com` and the dedicated Codex OAuth provider. OpenAI-compatible gateways can opt in per provider or model:
+
+| Key | Effect |
+| --- | --- |
+| `supportsPromptCacheKey` | Sends the stable session-derived `prompt_cache_key` body field |
+| `sendSessionAffinityHeaders` | Sends headers using `sessionAffinityFormat` |
+| `sessionAffinityFormat` | `openai` sends `session_id`; `openrouter` sends `x-session-id` |
+
+Enable only fields documented by the target service. Unknown gateways retain their existing request shape by default.
+
+### Anthropic prompt-cache compat keys
+
+Providers using the `anthropic-messages` API accept three `compat` booleans controlling prompt caching. All default to enabled, except `cache_control` is detected as unsupported for any base URL that is not `api.anthropic.com`.
+
+| Key | Effect when `false` |
+| --- | --- |
+| `supportsCacheControl` | No cache breakpoints at all; request is byte-identical to an uncached one |
+| `supportsLongCacheRetention` | Clamps the 1-hour TTL to the 5-minute default |
+| `supportsCacheControlOnTools` | Drops only the tool-schema breakpoint |
+
+Set them per provider or per model:
+
+```toml
+schema_version = 1
+
+[[providers]]
+name = "anthropic"
+compat = { supportsLongCacheRetention = false }
+```
+
+---
+
+## providers.json
+
+Runtime preferences — selected provider, default model, custom headers, timeout settings — live in `~/.tau/providers.json`. API keys and OAuth credentials are **not** stored here; they live in `credentials.json`.
+
+```json
+{
+  "schema_version": 2,
+  "default_provider": "local-gateway",
+  "provider_preferences": {
+    "local-gateway": {
+      "default_model": "qwen-coder",
+      "headers": { "X-Provider-Header": "value" },
+      "thinking_defaults": { "qwen-coder": "low" },
+      "timeout_seconds": 120,
+      "max_retries": 2,
+      "max_retry_delay_seconds": 0.5
+    }
+  },
+  "scoped_models": [
+    { "provider": "local-gateway", "model": "qwen-coder" }
+  ]
+}
+```
+
+<ParamField path="schema_version" type="integer" required>
+  Must be `2`. Tau rejects unsupported versions. Files with schema version 1 (containing full provider entries) are migrated automatically on first load; the original is kept as `providers.json.bak`.
+</ParamField>
+
+<ParamField path="default_provider" type="string">
+  Provider name to use when no `--provider` flag is supplied. Must exist in the effective catalog.
+</ParamField>
+
+<ParamField path="provider_preferences" type="object">
+  Keyed by provider name. Each value is a preferences object with the fields below.
+</ParamField>
+
+<ParamField path="provider_preferences[name].default_model" type="string">
+  Default model for this provider. Must appear in the provider's `models` list.
+</ParamField>
+
+<ParamField path="provider_preferences[name].headers" type="object">
+  Optional string-to-string map of extra HTTP headers sent with every request to this provider. For example, Hugging Face organization billing: `{"X-HF-Bill-To": "my-org"}`.
+</ParamField>
+
+<ParamField path="provider_preferences[name].thinking_defaults" type="object">
+  Maps model ID to a preferred thinking level for new sessions. Resumed sessions continue using their saved session history.
+</ParamField>
+
+<ParamField path="provider_preferences[name].inference_providers" type="object">
+  Hugging Face only. Maps model ID to an explicit inference provider suffix (e.g. `"zai-org/GLM-5.2": "deepinfra"`). Must be an explicit suffix advertised by Hugging Face — not routing policies like `fastest` or `cheapest`.
+</ParamField>
+
+<ParamField path="provider_preferences[name].timeout_seconds" type="number" default="60">
+  Request timeout in seconds. Must be greater than 0.
+</ParamField>
+
+<ParamField path="provider_preferences[name].max_retries" type="integer" default="2">
+  Maximum retry count for transient errors. Must be ≥ 0. Retries cover HTTP status codes `408`, `409`, `425`, `429`, `5xx`, transport errors, and transient in-stream SSE errors on otherwise-successful HTTP 200 responses.
+</ParamField>
+
+<ParamField path="provider_preferences[name].max_retry_delay_seconds" type="number" default="1">
+  Maximum delay between retries in seconds. Must be ≥ 0.
+</ParamField>
+
+<ParamField path="scoped_models" type="array">
+  Favorite `{provider, model}` pairs available in the **Ctrl+P** quick-cycle list in the TUI.
+</ParamField>
+
+<Note>
+Provider capabilities — model lists, context windows, transports, and thinking support — always come from the current effective catalog, not from `providers.json`. Tau ignores unrecognized preference fields for cross-version compatibility.
+</Note>
+
+---
+
+## settings.json
+
+General user settings live in `~/.tau/settings.json`. This file is user-global only; a project cannot choose its own trust policy.
+
+```json
+{
+  "defaultProjectTrust": "ask",
+  "shellCommandPrefix": "shopt -s expand_aliases\nsource ~/.tau/shell-aliases.bash"
+}
+```
+
+<ParamField path="defaultProjectTrust" type="string" default="ask">
+  Controls how Tau handles project-input trust for new projects. Accepted values: `"ask"` (opens the trust modal interactively; safely declines in headless mode), `"always"` (auto-trust all projects), `"never"` (decline all project inputs).
+</ParamField>
+
+<ParamField path="shellCommandPrefix" type="string">
+  Shell snippet prepended to every command run by the `bash` tool and terminal commands (`!`, `!!`). Use this to load a Tau-specific alias file. The snake_case key `shell_command_prefix` is also accepted.
+</ParamField>
+
+### Shell aliases example
+
+Non-interactive shells do not load `~/.zshrc` or `~/.bashrc`. To make aliases available, create a small alias file and reference it via `shellCommandPrefix`:
+
+```bash
+# ~/.tau/shell-aliases.bash
+alias gst='git status'
+alias ga='git add'
+alias gc='git commit'
+```
+
+```json
+{
+  "shellCommandPrefix": "shopt -s expand_aliases\nsource ~/.tau/shell-aliases.bash"
+}
+```
+
+<Warning>
+`shellCommandPrefix` changes affect **new** sessions only. An already-running session keeps the prefix it started with. Keep aliases POSIX/bash-compatible; zsh-only syntax may not work.
+</Warning>
+
+---
+
+## tui.json
+
+The built-in TUI frontend reads optional settings from `~/.tau/tui.json`.
+
+```json
+{
+  "theme": "high-contrast",
+  "sidebar_position": "right",
+  "turn_notification": "desktop",
+  "keybindings": {
+    "cancel": "escape",
+    "command_palette": "ctrl+k",
+    "session_picker": "ctrl+r",
+    "queue_follow_up": "alt+enter",
+    "accept_completion": "tab",
+    "completion_next": "down",
+    "completion_previous": "up",
+    "thinking_cycle": "shift+tab",
+    "model_cycle": "ctrl+p",
+    "toggle_thinking": "ctrl+t",
+    "toggle_tool_results": "ctrl+o",
+    "copy_message": "ctrl+c",
+    "quit": "ctrl+d"
+  }
+}
+```
+
+<ParamField path="theme" type="string" default="tau-dark">
+  Active color theme. Built-in values: `"tau-dark"`, `"tau-light"`, `"high-contrast"`. Custom themes are JSON files placed in `~/.tau/themes/` or a project's `.tau/themes/`. A configured theme that cannot be found falls back to `tau-dark` with a startup notice, without overwriting the setting.
+</ParamField>
+
+<ParamField path="sidebar_position" type="string" default="right">
+  Session metadata sidebar placement. Accepted values: `"right"`, `"left"`, `"off"`. `"off"` hides the sidebar entirely; the compact session info row below the prompt still works.
+</ParamField>
+
+<ParamField path="turn_notification" type="string" default="desktop">
+  Notification emitted when Tau becomes fully idle while its terminal surface is unfocused. Accepted values: `"desktop"` (OSC 9 for Ghostty/iTerm2/MinTTY, or Kitty's OSC 99), `"bell"` (standard terminal bell), `"off"`. No notification is emitted while Tau has focus.
+</ParamField>
+
+<ParamField path="keybindings" type="object">
+  Map of action name to Textual key syntax string. Omitted keys keep their defaults. Tau ignores unrecognized keys so a `tui.json` written by a newer version does not break an older one.
+</ParamField>
+
+<Note>
+Tau rejects invalid values, empty keys, and duplicate assignments in recognized settings, but silently ignores unrecognized fields for forward compatibility.
+</Note>
+
+---
+
+## System prompt files
+
+Tau can replace or extend its generated system prompt using Markdown files at four locations:
+
+```text
+~/.tau/SYSTEM.md                 # user replacement
+~/.tau/APPEND_SYSTEM.md          # user append
+<project>/.tau/SYSTEM.md         # project replacement
+<project>/.tau/APPEND_SYSTEM.md  # project append
+```
+
+**Precedence** (highest wins): explicit CLI input → project file → user file. A higher-precedence append file replaces the lower-precedence one; Tau does not concatenate project and user append files. Replacement content still receives the selected append text, project instructions, eligible skills, the current date, and the working directory. Empty files are valid and act as explicit overrides.
+
+<Steps>
+  <Step title="Add or edit a file">
+    Create `~/.tau/APPEND_SYSTEM.md` with your additional instructions, or `~/.tau/SYSTEM.md` to replace the base prompt entirely.
+  </Step>
+  <Step title="Reload">
+    Run `/reload` in the TUI. Tau rebuilds the prompt for the next model request without adding it to session history.
+  </Step>
+  <Step title="Inspect">
+    Run `/session` to see resource diagnostics: which files were selected, shadowed, or overridden by the CLI.
+  </Step>
+</Steps>
+
+<Warning>
+System prompt files are Tau-specific and are not discovered from `.agents` directories. Project files load only after the destination `cwd` is trusted. A selected file that cannot be inspected or decoded as UTF-8 stops startup or reload rather than silently falling back. Inspect trusted prompt files — they can replace or extend the model's highest-priority instructions.
+</Warning>
+
+---
+
+## Network proxies
+
+Tau uses `httpx` for all outbound HTTP — provider requests, OAuth token refreshes, and update checks — and honors standard proxy environment variables.
+
+```bash
+export HTTP_PROXY=http://proxy.corp.example.com:8080
+export HTTPS_PROXY=http://proxy.corp.example.com:8080
+export NO_PROXY=localhost,127.0.0.1
+```
+
+SOCKS proxies are supported. Use an explicit scheme when possible:
+
+```bash
+# SOCKS5 with local DNS resolution
+export ALL_PROXY=socks5://127.0.0.1:1080
+
+# SOCKS5 with proxy-side DNS resolution
+export ALL_PROXY=socks5h://127.0.0.1:1080
+```
+
+Tau normalizes the generic `socks://` scheme to `socks5://` before creating HTTP clients, because `httpx` does not recognize the generic form directly. Without this normalization, Tau would fail before making any model API request with an error like `Unknown scheme for proxy URL URL('socks://...')`.
+
+| Variable | Scope |
+| --- | --- |
+| `HTTP_PROXY` | Plain HTTP requests |
+| `HTTPS_PROXY` | HTTPS requests |
+| `ALL_PROXY` | All requests (fallback when the protocol-specific var is unset) |
+| `NO_PROXY` | Comma-separated list of hosts to bypass |

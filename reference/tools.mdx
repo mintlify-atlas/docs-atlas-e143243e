@@ -1,0 +1,221 @@
+---
+title: "Built-in Coding Tools: read, write, edit, and bash"
+sidebarTitle: "Tools"
+description: "Reference for Tau's four built-in coding tools — read, write, edit, and bash — including parameters, output limits, image support, and terminal ! commands."
+---
+
+Tools are the actions the Tau agent can take in your working directory. The model decides when to call them; Tau executes them and streams the results back. All paths are resolved against the session's working directory (`--cwd`, or the directory you launched Tau from). Tau ships four built-in coding tools: `read`, `write`, `edit`, and `bash`.
+
+<Note>
+This page documents tool behavior — what the model can do on your machine. Extensions can register additional tools or replace any of these built-ins. See the Extensions documentation for details.
+</Note>
+
+---
+
+## `read`
+
+Reads a file from disk and returns its contents. For text files, content is decoded as UTF-8 and optionally sliced with `offset` and `limit`. For supported image formats, the file is processed and returned as an image attachment to vision-capable models.
+
+```json
+{ "path": "README.md", "offset": 1, "limit": 40 }
+```
+
+### Parameters
+
+<ParamField path="path" type="string" required>
+  Path to the file to read, resolved relative to the session `cwd`. Absolute paths are also accepted.
+</ParamField>
+
+<ParamField path="offset" type="integer">
+  1-indexed line number to start reading from. `0` and `1` both mean the beginning of the file.
+</ParamField>
+
+<ParamField path="limit" type="integer">
+  Maximum number of lines to return. Must be at least 1.
+</ParamField>
+
+### Text file behavior
+
+Text output is truncated to at most **2,000 lines or 50 KB** (whichever limit is reached first). When truncation occurs, Tau appends a continuation hint:
+
+```text
+[Showing lines 1-2000 of 3400. Use offset=2001 to continue.]
+```
+
+Use `offset` and `limit` together to page through large files without re-reading content already in context.
+
+### Image support
+
+`read` detects supported images from file content (not just extension). Supported formats: **JPEG, static PNG, GIF, WebP, and BMP**. BMP files are converted to PNG before sending.
+
+Tau validates and resizes images as needed:
+- Maximum processed dimensions: **2,000 × 2,000 pixels** (no upscaling, aspect ratio preserved)
+- Maximum processed size: **5 MB**
+- Maximum source file size: **50 MB** or **40 million pixels**
+
+Animated PNG and JPEG XL inputs receive explicit unsupported-format notices. If decoding, conversion, or resizing cannot produce a safe attachment, Tau returns a clear omission notice rather than an error.
+
+When the active model does not accept images, `read` returns a text-only notice stating that the image is unavailable and recommending a switch to a vision-capable model. It does not attach or process the image.
+
+### Failure modes
+
+`read` fails when `path` is missing or invalid, the file does not exist, the path is a directory, `offset` is past the end of the file, or the file is neither valid UTF-8 text nor a supported image format.
+
+---
+
+## `write`
+
+Creates or overwrites a complete UTF-8 text file. Parent directories are created automatically if they do not exist.
+
+```json
+{ "path": "src/example.py", "content": "print('hello')\n" }
+```
+
+### Parameters
+
+<ParamField path="path" type="string" required>
+  Path to the file to write, resolved relative to the session `cwd`.
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  Complete file contents. The entire existing file is replaced.
+</ParamField>
+
+### Behavior
+
+Concurrent `write` and `edit` calls on the same resolved file are serialized within a process using per-path async locks — they will never interleave. Use `write` for new files or complete rewrites; use `edit` for targeted changes to existing files.
+
+---
+
+## `edit`
+
+Applies one or more exact text replacements to a single file. All replacements are validated before anything is written, so the file is left unchanged if any edit fails.
+
+```json
+{
+  "path": "src/example.py",
+  "edits": [
+    { "oldText": "print('hello')", "newText": "print('hello, Tau')" }
+  ]
+}
+```
+
+### Parameters
+
+<ParamField path="path" type="string" required>
+  Path to the file to edit, resolved relative to the session `cwd`.
+</ParamField>
+
+<ParamField path="edits" type="array" required>
+  One or more replacement objects. Must contain at least one item.
+</ParamField>
+
+<ParamField path="edits[].oldText" type="string" required>
+  Exact text to find. Must be non-empty, must appear **exactly once** in the file, and must not overlap any other edit's `oldText`.
+</ParamField>
+
+<ParamField path="edits[].newText" type="string" required>
+  Replacement text. May be empty (to delete `oldText`).
+</ParamField>
+
+### Behavior and constraints
+
+Each `oldText` is matched against the **original file content**, not against the file after earlier edits in the same call. This means:
+
+- All edits in a single call validate against the same original snapshot.
+- Overlapping or nested `oldText` ranges are rejected.
+- Nearby changes should be merged into one edit item rather than split into multiple items with adjacent `oldText` values.
+
+Line endings are normalized to LF for matching; the original file's dominant line ending (LF or CRLF) is restored after replacement. UTF-8 byte-order marks are preserved.
+
+Successful results include an ndiff-style diff, a unified patch, and the first changed line number in the result details.
+
+<Tip>
+Keep `oldText` as small as possible while still being unique in the file. Adding large unchanged regions just to anchor the match makes the edit more brittle and wastes context.
+</Tip>
+
+---
+
+## `bash`
+
+Runs a shell command in the session working directory and returns the combined stdout and stderr output.
+
+```json
+{ "command": "pytest -q", "timeout": 30 }
+```
+
+### Parameters
+
+<ParamField path="command" type="string" required>
+  Shell command to execute. Runs in a non-interactive bash-compatible shell.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Brief present-participle summary of what the command does, e.g. `"Running tests"` or `"Checking lint"`. Used in the TUI activity display.
+</ParamField>
+
+<ParamField path="timeout" type="number">
+  Maximum runtime in seconds. Must be greater than 0. There is no default timeout — commands run until completion unless a limit is set.
+</ParamField>
+
+### Behavior
+
+- Stdout and stderr are **combined** into one output stream.
+- Exit code `0` is considered success; non-zero exits append a status line to the output.
+- Output is **tail-truncated** to 2,000 lines or 50 KB (whichever comes first). When truncated, the full output is written to a temporary `.log` file and that path is reported in the result.
+- On POSIX systems, a timeout kills the **entire process group**, preventing orphaned subprocesses from pipelines or compound commands.
+- Commands run in a non-interactive shell. Aliases from `~/.zshrc` or `~/.bashrc` are not available unless you configure a `shellCommandPrefix` in `settings.json`.
+
+<Warning>
+Tau deliberately never reads `~/.zshrc` or `~/.bashrc` — those files can hold tokens and side effects. Use `shellCommandPrefix` in `settings.json` to opt in to a specific alias file.
+</Warning>
+
+---
+
+## Terminal commands: `!` and `!!`
+
+In the TUI input bar, you can run shell commands directly without invoking the agent. Two prefixes are supported:
+
+<Tabs>
+  <Tab title="! command">
+    Runs the command in the project `cwd` and **optionally** adds the output to context. The output is displayed in the terminal but not automatically sent to the model — use this for quick one-off checks.
+
+    ```text
+    ! git status
+    ! npm test
+    ! ls -la
+    ```
+  </Tab>
+  <Tab title="!! command">
+    Runs the command in the project `cwd` and **always** adds the output to the agent's context as a user message. Use this when you want the model to see the command result and respond to it.
+
+    ```text
+    !! cat error.log
+    !! pytest --tb=short
+    !! git diff HEAD
+    ```
+  </Tab>
+</Tabs>
+
+Both forms use the same non-interactive shell as the `bash` tool and respect any configured `shellCommandPrefix`. The command runs with the session's working directory as `cwd`.
+
+<Note>
+Terminal commands appear in the TUI input bar. They are a user-facing shortcut, not an agent tool — the model cannot issue `!` commands, only the `bash` tool.
+</Note>
+
+---
+
+## Choosing the right tool
+
+| Situation | Tool |
+| --- | --- |
+| Inspect a file without modifying it | `read` |
+| Create a new file or completely replace an existing one | `write` |
+| Change specific lines or blocks in an existing file | `edit` |
+| Run tests, linters, searches, or build commands | `bash` |
+
+---
+
+## `/tools` command
+
+In the TUI, run `/tools` to see the list of registered tools for the current session. Extensions can register additional tools or replace any built-in. Custom tools registered by extensions appear alongside the four built-ins in this list.

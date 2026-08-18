@@ -1,0 +1,206 @@
+---
+title: "Complete CLI Reference for the Tau Coding Agent"
+sidebarTitle: "CLI"
+description: "Every Tau command, flag, and environment variable — from launching the TUI to headless print mode, provider setup, and session export."
+---
+
+The `tau` command launches an interactive terminal coding session by default. Subcommands and flags cover headless automation, provider configuration, session management, and export. Put all recognized flags **before** any positional prompt text — Tau treats everything after the last known flag as prompt content, including tokens that look like flags.
+
+```text
+tau [OPTIONS] [PROMPT] [COMMAND] [ARGS]
+```
+
+- With no arguments, `tau` opens the interactive [TUI](/guides/tui).
+- A positional `PROMPT` opens the TUI and submits it as the first turn.
+- `-p / --print` (or `--mode`) runs the prompt in non-interactive [print mode](/guides/print-mode) instead of the TUI.
+
+## Commands
+
+<Note>
+  `tau update`, `tau sessions`, `tau export`, `tau providers`, and `tau --version` never run the update-availability check. Only TUI and print-mode startup show the non-blocking update notice.
+</Note>
+
+| Command | Description |
+|---|---|
+| `tau` | Open the interactive TUI |
+| `tau "prompt text"` | Open the TUI with an initial prompt submitted automatically |
+| `tau update` | Upgrade Tau using the installer that manages its environment. On Windows with `uv tool`, the update is handed off and continues after Tau exits — follow the printed log path for the final result. |
+| `tau sessions` | List indexed sessions, showing id, title, model, and working directory |
+| `tau export <ref> [dest] [--format html\|jsonl]` | Export a session by id or JSONL path. Defaults to HTML. |
+| `tau providers` | List all configured providers and how each one authenticates |
+| `tau [setup options] setup` | Create or update an OpenAI-compatible provider entry |
+
+## Main Flags
+
+These flags apply to `tau` (both TUI and print mode) and are placed before the positional prompt.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `-p, --print` | flag | off | Run the positional prompt in non-interactive print mode |
+| `-m, --model` | text | provider default | Model name to request from the provider |
+| `--provider` | text | configured default | Configured provider name to use |
+| `--cwd` | path | current directory | Working directory for built-in coding tools |
+| `--mode` | `text\|json\|transcript\|rpc` | — | Select headless output format; `rpc` starts the JSONL subprocess protocol |
+| `--session` | text | — | Resume a session by id in TUI or print mode |
+| `--new-session` | flag | off | Start a fresh session instead of resuming the default |
+| `--session-id` | text | — | Set the exact id for a newly created print-mode session; errors if that id already exists |
+| `--system-prompt` | text or path | — | Replace Tau's default system-prompt base with literal text or a UTF-8 file |
+| `--append-system-prompt` | text or path | — | Append literal text or a UTF-8 file to the system prompt (repeatable) |
+| `--auto-compact-threshold` | integer | — | Auto-compact TUI context when the rough token estimate exceeds this value |
+| `-e, --extension` | path | — | Load an extension file or directory (repeatable) |
+| `--no-extensions` | flag | off | Disable extension directory discovery; explicit `-e` paths still load |
+| `--project-extensions` | flag | off | Also load trusted `<project>/.tau/extensions`; project trust and this flag are both required |
+| `-a, --approve` | flag | off | Trust protected project inputs for this invocation only |
+| `-na, --no-approve` | flag | off | Decline protected project inputs for this invocation only |
+| `-v, --version` | flag | — | Print Tau's version and exit |
+
+<Note>
+  `--approve` and `--no-approve` are mutually exclusive and never write to the trust store. See [Project trust](/guides/project-trust) for interactive scopes, headless defaults, and protected resources.
+</Note>
+
+## Provider Setup Flags
+
+Provider setup flags configure a new OpenAI-compatible provider entry. Place them before the final `setup` argument. `--provider` and `--model` are shared with the main flag set and carry their values into setup.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider` | `openai` | Provider name to create or update |
+| `--model` | default model | Default model for the provider |
+| `--base-url` | OpenAI URL | OpenAI-compatible base URL |
+| `--api-key-env` | `OPENAI_API_KEY` | Environment variable that holds the API key |
+| `--timeout-seconds` | `60.0` | HTTP timeout in seconds |
+| `--max-retries` | `2` | Retry count for transient failures |
+| `--max-retry-delay-seconds` | `1.0` | Delay between retries in seconds |
+| `--set-default / --no-set-default` | `--set-default` | Make this provider the global default |
+
+<CodeGroup>
+```bash Register a local Ollama provider
+tau --provider local \
+  --base-url http://localhost:11434/v1 \
+  --api-key-env LOCAL_API_KEY \
+  --model qwen \
+  setup
+```
+
+```bash Register a custom OpenAI-compatible endpoint
+tau --provider my-company \
+  --base-url https://api.my-company.com/v1 \
+  --api-key-env MY_CO_API_KEY \
+  --model gpt-4o \
+  --no-set-default \
+  setup
+```
+</CodeGroup>
+
+## System Prompt Input
+
+`--system-prompt` replaces Tau's default base prompt entirely. Use `--append-system-prompt` (repeatable) to add sections after the base; Tau separates each resolved value with exactly one blank line and joins them in command-line order.
+
+Place both flags before the positional prompt, like any other option:
+
+```bash
+tau --system-prompt "You are a focused code reviewer." \
+  --append-system-prompt ./team-rules.md \
+  --append-system-prompt "Flag risky changes first." \
+  -p "review this repository"
+```
+
+For both options, Tau resolves the value as a **UTF-8 file** when that path exists (expanding `~`). When no file is found, the value is used verbatim — so a nonexistent path becomes literal prompt text. Existing directories, unreadable files, and invalid UTF-8 content all stop startup with an error that names the option and path.
+
+<Note>
+  A custom base prompt still receives appended text, discovered project instructions, eligible skills (when the `read` tool is enabled), the current date, and the working directory. These options apply to print mode and TUI startup; when used with `--session`, they configure the resumed session's next provider request. They are **startup controls** and are not persisted in session history — pass them again on subsequent resumes when needed.
+</Note>
+
+Without CLI flags, Tau also discovers `SYSTEM.md` and `APPEND_SYSTEM.md` under the project or user `.tau` directory. CLI values take precedence over trusted project files, and project files take precedence over user files. Use `/reload` after editing a file. See [Configuration & files](/reference/configuration#system-prompt-files) for paths, precedence, and security notes.
+
+## Resume in Print Mode
+
+Combine `--print` and `--session` to append a non-interactive follow-up to an existing conversation. Tau loads the session's saved working directory, provider, model, and full conversation history:
+
+```bash
+tau --print --session <session-id> "What did we decide about the auth approach?"
+```
+
+Explicit `--provider`, `--model`, and system-prompt options override the saved startup choices for this single invocation. `--session` cannot be combined with `--new-session` or `--session-id`. An unknown session id exits with an error.
+
+## Export
+
+Export a session to HTML (default) or JSONL. The session reference can be a session id from `tau sessions` or a path to a `.jsonl` file on disk.
+
+```bash
+# Export to HTML in the current directory (default)
+tau export <session-id>
+
+# Export to a specific file
+tau export <session-id> ./report.html
+
+# Export as JSONL
+tau export <session-id> --format jsonl ./transcript.jsonl
+
+# Equivalent top-level flag form
+tau --export <session-id> ./report.html
+```
+
+<Note>
+  HTML exports include the active system prompt in a collapsed section. Review it before sharing — it may contain project instructions or local context. JSONL exports do not include the system prompt. Offline export from stored JSONL cannot recover it.
+</Note>
+
+## Update Check
+
+On TUI and print-mode startup, Tau may show a non-blocking notice when a newer `tau-ai` release is available on PyPI. In the TUI the notice appears as the first transcript item in bright yellow. Run `tau update` to upgrade.
+
+Disable the check by setting the environment variable:
+
+```bash
+TAU_NO_UPDATE_CHECK=1 tau
+```
+
+After an upgrade, the TUI adds a one-time release-notes message to the transcript with the new features and fixes.
+
+## Common Usage Examples
+
+<CodeGroup>
+```bash Interactive TUI
+# Open the TUI
+tau
+
+# Open with an initial prompt
+tau "Explain the session storage implementation"
+
+# Open in a specific directory
+tau --cwd ~/projects/myapp
+```
+
+```bash Print / headless mode
+# Run a one-shot prompt and print the output
+tau -p "Summarize the README"
+
+# JSON output for scripting
+tau --mode json "List all public functions in src/"
+
+# Pipe content in
+cat error.log | tau -p "What caused this error?"
+```
+
+```bash Session management
+# List all sessions
+tau sessions
+
+# Resume a session in the TUI
+tau --session abc123
+
+# Resume in print mode with a follow-up
+tau --print --session abc123 "Now fix the issue you identified"
+
+# Start fresh (ignore default session)
+tau --new-session
+```
+
+```bash Provider and model selection
+# Use a specific provider and model
+tau --provider local --model qwen2.5
+
+# Check which providers are configured
+tau providers
+```
+</CodeGroup>

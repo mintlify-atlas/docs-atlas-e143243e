@@ -1,0 +1,112 @@
+---
+title: "Managing Context, Compaction, and Thinking Modes in Tau"
+sidebarTitle: "Context"
+description: "Understand how Tau counts context tokens, use /session to inspect usage, configure auto-compact thresholds, and tune reasoning effort with thinking modes."
+---
+
+Every model has a **context window** — the maximum amount of text it can process at once. In long coding sessions, the accumulated conversation, tool results, and project files can fill that window. Tau handles this through **compaction** (summarizing older history) and lets you tune how hard the model reasons with **thinking modes**. Understanding what gets counted and when compaction triggers helps you keep sessions healthy.
+
+## How context is counted
+
+The compact status block below the TUI prompt shows provider-anchored active context as `used/limit`. After a successful model response, Tau uses the provider-reported token usage as the authoritative size of the context that response processed. It then estimates only messages added afterward.
+
+Before the first response, immediately after compaction, or when no valid usage is available, Tau falls back to a deterministic estimate — roughly `characters / 4` plus small per-message and per-tool overhead. This estimate covers the system prompt, project context (`AGENTS.md`), skill metadata, active message history, and tool schemas.
+
+When no valid provider usage exists yet (for example, immediately after compaction), the status block shows `?/limit` rather than presenting the fallback estimate as provider-confirmed usage.
+
+## Inspecting context with `/session`
+
+Run `/session` at any time to see the detailed breakdown:
+
+```text
+Estimated context tokens: <count>
+Context window: <count>
+Context window source: configured catalog | provider live catalog
+Context token breakdown: system=<count>, messages=<count>, tools=<count>
+Thinking mode: <mode>
+```
+
+When provider usage anchors the active count, `/session` also reports:
+
+```text
+Context token basis: provider=<count>, estimated trailing=<count>
+```
+
+<Info>
+The active context count shown here is different from the cumulative usage totals in the TUI sidebar. Cumulative usage adds provider-reported input and output tokens from every request on the active branch — including history later replaced by compaction. Active context describes only what Tau expects to send on the next request. A low active context count after compaction is expected; cumulative usage continues to rise.
+</Info>
+
+## Automatic compaction
+
+By default, Tau compacts automatically when the context estimate gets close to the model's context window. Tau checks three moments:
+
+- **Before a new prompt** — to catch context added out-of-band
+- **After a successful turn** — to compact before your next turn
+- **After a context-overflow error** — force compaction regardless of the local estimate, then retry once
+
+When it compacts, Tau asks the model to summarize older messages, keeps a recent suffix of the conversation, and continues. The original session JSONL file is never edited — only the active context sent to the provider changes.
+
+The default threshold follows the model's context window minus a reserve. Providers that advertise an explicit runtime threshold can override that default. Codex subscription sessions discover account/rollout-specific limits from the authenticated Codex model catalog because those limits can differ from the public API. Override the threshold for a specific run:
+
+```bash
+tau --auto-compact-threshold 100000
+```
+
+Automatic compaction is best-effort: if summarization fails, Tau logs it and keeps the original context. During successful overflow recovery, the TUI shows compaction and retry progress instead of presenting the intermediate provider rejection as a terminal error.
+
+## Manual compaction
+
+Compact on demand at any time:
+
+```text
+/compact
+/compact focus on the database migration work
+```
+
+Optional text after `/compact` is added as extra focus for the summary. Manual compaction summarizes the entire active context into one summary and fails visibly if the request fails — unlike automatic compaction, there is no silent fallback.
+
+In the TUI, manual compaction looks like a normal working turn: the prompt activity indicator and terminal tab title animate while it runs, and a turn-finished notification fires when it completes while the app is unfocused. Press **Esc** to cancel.
+
+## Thinking modes
+
+Some models can spend extra effort reasoning before answering. Tau exposes this as a **thinking level** you can cycle at any time, even mid-session:
+
+```text
+off → minimal → low → medium → high → xhigh
+```
+
+<CardGroup cols={2}>
+  <Card title="Shift+Tab" icon="rotate-left">
+    Cycle the thinking level. The default starting level is `medium`, but Tau picks a valid level for the selected model automatically — a remembered per-model choice wins, then `medium`, then the provider's own default, then the first level the model supports.
+  </Card>
+  <Card title="Ctrl+T" icon="eye">
+    Toggle whether reasoning tokens are shown in the transcript. Reasoning blocks are hidden by default but are saved with the assistant response, so their original positions and visibility toggle are restored when you resume a session.
+  </Card>
+</CardGroup>
+
+Thinking is model-aware: Tau enables it only when the active provider declares supported levels for the active model. When thinking is unavailable, `/session` shows the reason — for example, that the provider does not declare `thinking_levels` for the active model, or that the model is not listed. Custom providers can opt in by adding `thinking_levels` to their catalog definition.
+
+### Per-model behavior
+
+Different models support different subsets of thinking levels. For example:
+
+- **`kimi-code:k3`** supports `low`, `high`, and `xhigh` only; because `medium` is unavailable, it opens at its `xhigh` catalog default.
+- **`kimi-code:k3`** maps Tau's `xhigh` to the provider's `max` reasoning effort value.
+- **Claude Opus 5** with adaptive thinking maps `xhigh` to Anthropic's maximum effort and sends an explicit disabled-thinking request for `off`.
+- **DeepSeek V4 Pro** supports only `off`, `high`, and `xhigh` (mapped to `none`, `high`, and `max` respectively on the wire).
+
+Picking an unsupported level explicitly — via `/think` or the thinking picker — shows an error listing the available modes.
+
+### Thinking level picker
+
+You can also select a thinking level through the `/session` command picker or by using the `/think` slash command followed by a level name. Tau stores your per-model thinking preference so it is restored automatically the next time you start a session with that model.
+
+## Overflow handling
+
+If a request fails with a context-overflow error, Tau:
+
+1. Forces compaction regardless of the local context estimate
+2. Retries the request once with the compacted context
+3. Shows the error in the TUI only if recovery cannot complete
+
+This means transient overflow errors are often transparent. If compaction itself fails (for example because the model is unavailable), Tau surfaces the original overflow error.

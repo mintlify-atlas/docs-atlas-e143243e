@@ -1,0 +1,109 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Tau",
+  "projectDescription": "A minimalist terminal coding agent that reads files, edits code, runs shell commands, and maintains durable session history — built as a readable teaching example of how coding agents are structured.",
+  "theme": "luma",
+  "primaryColor": "#13213c",
+  "lightColor": "#1b3fa0",
+  "darkColor": "#fbc016",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/providers-and-models",
+              "guides/tui",
+              "guides/sessions",
+              "guides/context",
+              "guides/project-instructions",
+              "guides/skills-and-prompts",
+              "guides/extensions",
+              "guides/print-mode",
+              "guides/project-trust",
+              "guides/themes"
+            ]
+          },
+          {
+            "group": "Internals",
+            "pages": [
+              "internals/architecture",
+              "internals/agent-loop",
+              "internals/custom-frontend"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI & Commands",
+            "pages": [
+              "reference/cli",
+              "reference/slash-commands",
+              "reference/keybindings"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "reference/configuration",
+              "reference/tools",
+              "reference/rpc"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Interactive Textual TUI and non-interactive print mode",
+    "Built-in coding tools: read, write, edit, and bash",
+    "Durable JSONL sessions with resume, branching, and export",
+    "Multi-provider support: OpenAI, Anthropic, Codex, GitHub Copilot, Hugging Face, OpenRouter, and local models",
+    "Python extension API for custom tools, slash commands, hooks, and UI dialogs",
+    "Project instructions from AGENTS.md, .tau/, and .agents/ resources",
+    "User skills, prompt templates, and custom TUI themes",
+    "Context accounting, manual/automatic compaction, and thinking-level controls",
+    "Pi-compatible JSONL RPC mode for subprocess integration",
+    "Three-layer architecture (tau_ai → tau_agent → tau_coding) for reuse and readability"
+  ],
+  "publicApiSurface": [
+    "tau (CLI entry point)",
+    "tau -p / --print (print mode)",
+    "tau --mode [text|json|transcript|rpc]",
+    "tau --session <id> (resume session)",
+    "tau --model / --provider (model selection)",
+    "tau --extension / -e (load extension)",
+    "tau --system-prompt / --append-system-prompt",
+    "tau --approve / --no-approve (project trust override)",
+    "tau update / tau sessions / tau export / tau providers / tau setup",
+    "AgentHarness (tau_agent library class)",
+    "AgentHarnessConfig (tau_agent library class)",
+    "AgentTool / AgentToolResult (tool definition types)",
+    "ExtensionAPI.register_tool()",
+    "ExtensionAPI.register_command()",
+    "ExtensionAPI.on() (event subscription)",
+    "ExtensionAPI.send_user_message()",
+    "ExtensionAPI.send_custom_message()",
+    "ExtensionAPI.register_message_renderer()",
+    "ExtensionAPI.context (ExtensionContext)",
+    "ExtensionAPI.set_inference_provider()",
+    "~/.tau/catalog.toml (provider catalog overlay)",
+    "~/.tau/providers.json (runtime provider preferences)",
+    "~/.tau/settings.json (general settings)",
+    "~/.tau/tui.json (TUI theme and keybindings)",
+    "~/.tau/extensions/ (user extension directory)"
+  ]
+}

@@ -1,0 +1,340 @@
+---
+title: "Building a Custom Frontend on Tau's Event Stream"
+sidebarTitle: "Custom Frontend"
+description: "Use AgentHarness or CodingSession to drive Tau's agent from your own UI by consuming the same provider-neutral event stream the built-in TUI uses."
+---
+
+Tau's Textual TUI is one frontend, not the architecture. The event stream that drives the TUI is a public API — your own UI can plug into the same primitives and get exactly the same agent behaviour. This page shows how to go from zero to a working custom frontend, using real code from `tau_agent` and `tau_coding`.
+
+<Warning>
+  This page is for building a *new frontend* on top of Tau's core. If you just want to use Tau interactively, see the [interactive session guide](/guides/tui). The code here is Python and assumes you have read the [architecture overview](/internals/architecture) and [agent loop](/internals/agent-loop) pages.
+</Warning>
+
+## Two integration points
+
+You have two choices depending on how much of the stack you want:
+
+<CardGroup cols={2}>
+  <Card title="AgentHarness" icon="microchip">
+    The portable brain from `tau_agent`. No tools, no sessions, no config loading. Bring your own provider, model, and tools. Ideal for embedding Tau in a larger system.
+  </Card>
+  <Card title="CodingSession" icon="code">
+    The full coding environment from `tau_coding`. Loads providers, models, built-in coding tools, project instructions, skills, and durable JSONL sessions. Ideal for a full coding-agent alternative frontend.
+  </Card>
+</CardGroup>
+
+## Minimal working example with AgentHarness
+
+The following example creates a provider, builds a harness, and streams events to stdout. It is the exact pattern shown in `README.md` — expanded with type discrimination and streaming text output.
+
+```python
+import asyncio
+from tau_agent import (
+    AgentHarness,
+    AgentHarnessConfig,
+    AgentStartEvent,
+    AgentEndEvent,
+    MessageStartEvent,
+    MessageUpdateEvent,
+    MessageEndEvent,
+    ToolExecutionStartEvent,
+    ToolExecutionEndEvent,
+)
+from tau_agent.messages import AssistantMessage, TextContent
+
+# tau_ai provides the ModelProvider implementation for each vendor.
+# Import the provider you want — here we use a hypothetical OpenAI provider.
+from tau_ai.providers.openai import OpenAIProvider  # adjust to actual import
+
+async def main() -> None:
+    provider = OpenAIProvider(api_key="sk-...")
+    harness = AgentHarness(
+        AgentHarnessConfig(
+            provider=provider,
+            model="gpt-4o",
+            system="You are a helpful coding assistant.",
+            tools=[],   # add AgentTool instances here
+        )
+    )
+
+    async for event in harness.prompt("Explain what an async generator is."):
+        if isinstance(event, AgentStartEvent):
+            print("▶ agent started\n")
+
+        elif isinstance(event, MessageUpdateEvent):
+            msg = event.message
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextContent):
+                        print(block.text, end="", flush=True)
+
+        elif isinstance(event, MessageEndEvent):
+            print()  # newline after the completed message
+
+        elif isinstance(event, ToolExecutionStartEvent):
+            print(f"\n⚙  {event.tool_name}({event.args})")
+
+        elif isinstance(event, ToolExecutionEndEvent):
+            status = "✗" if event.is_error else "✓"
+            print(f"   {status} done\n")
+
+        elif isinstance(event, AgentEndEvent):
+            print(f"\n■ finished — {len(event.messages)} messages added")
+
+asyncio.run(main())
+```
+
+<Tip>
+  Start by printing `event.type` for every event so you can see the full sequence before writing rendering logic.
+</Tip>
+
+## Using CodingSession as your integration point
+
+`CodingSession` (from `tau_coding`) wraps the harness with the full coding-agent environment: provider/model loading from `~/.tau/`, built-in `read`, `write`, `edit`, and `bash` tools, project instruction discovery, skill expansion, and durable JSONL sessions. Build against `CodingSession` when you want a full coding-agent frontend without reimplementing provider config or tool loading.
+
+```python
+import asyncio
+from tau_coding.session import CodingSession
+from tau_coding.events import CodingSessionEvent
+from tau_agent import MessageUpdateEvent, AgentEndEvent
+from tau_agent.messages import AssistantMessage, TextContent
+
+async def main() -> None:
+    # CodingSession discovers providers, models, and tools from ~/.tau/
+    async with CodingSession.create(cwd="/path/to/project") as session:
+        async for event in session.prompt("Summarise this project."):
+            if isinstance(event, MessageUpdateEvent):
+                msg = event.message
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextContent):
+                            print(block.text, end="", flush=True)
+            elif isinstance(event, AgentEndEvent):
+                print(f"\n■ done")
+
+asyncio.run(main())
+```
+
+The `CodingSessionEvent` stream is a superset of `AgentEvent`: it extends the portable events with session-level events like `agent_settled`, queue updates, compaction signals, and session-info changes. Render from these events — never from raw provider chunks or internal session state.
+
+<Note>
+  Use `agent_settled` — not `agent_end` — to leave the running state. Automatic compaction, retry, or a queued follow-up may emit additional events after `agent_end`.
+</Note>
+
+## Event type discrimination pattern
+
+All events share a `type` field with a `Literal` discriminator value. You can use `isinstance` checks (mypy/pyright-friendly) or `match`/`case`:
+
+<Tabs>
+  <Tab title="isinstance checks">
+    ```python
+    from tau_agent import (
+        AgentStartEvent, AgentEndEvent,
+        TurnStartEvent, TurnEndEvent,
+        MessageStartEvent, MessageUpdateEvent, MessageEndEvent,
+        ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExecutionEndEvent,
+    )
+
+    async for event in harness.prompt(text):
+        if isinstance(event, AgentStartEvent):
+            on_run_start()
+        elif isinstance(event, TurnStartEvent):
+            on_turn_start()
+        elif isinstance(event, MessageUpdateEvent):
+            on_text_delta(event)
+        elif isinstance(event, ToolExecutionStartEvent):
+            on_tool_start(event.tool_name, event.args)
+        elif isinstance(event, ToolExecutionEndEvent):
+            on_tool_end(event.tool_name, event.result, event.is_error)
+        elif isinstance(event, AgentEndEvent):
+            on_run_end(event.messages)
+    ```
+  </Tab>
+  <Tab title="match / case">
+    ```python
+    async for event in harness.prompt(text):
+        match event:
+            case AgentStartEvent():
+                on_run_start()
+            case TurnStartEvent():
+                on_turn_start()
+            case MessageUpdateEvent(message=msg):
+                on_text_delta(msg)
+            case ToolExecutionStartEvent(tool_name=name, args=args):
+                on_tool_start(name, args)
+            case ToolExecutionEndEvent(tool_name=name, result=r, is_error=err):
+                on_tool_end(name, r, err)
+            case AgentEndEvent(messages=msgs):
+                on_run_end(msgs)
+    ```
+  </Tab>
+  <Tab title="type field">
+    ```python
+    async for event in harness.prompt(text):
+        match event.type:
+            case "agent_start":
+                on_run_start()
+            case "message_update":
+                on_text_delta(event)   # type: ignore[arg-type]
+            case "tool_execution_end":
+                on_tool_end(event)     # type: ignore[arg-type]
+            case "agent_end":
+                on_run_end(event.messages)  # type: ignore[attr-defined]
+    ```
+  </Tab>
+</Tabs>
+
+## Implementing a tool executor
+
+Each `AgentTool` bundles a JSON schema with an async executor. Here is a minimal custom tool that a custom frontend can register on the harness:
+
+```python
+from tau_agent import AgentTool, AgentToolResult
+from tau_agent.tools import ToolCancellationToken, ToolUpdateCallback
+from tau_agent.messages import TextContent
+from collections.abc import Mapping
+from tau_agent.types import JSONValue
+import asyncio
+
+
+async def fetch_url(
+    tool_call_id: str,
+    arguments: Mapping[str, JSONValue],
+    signal: ToolCancellationToken | None = None,
+    on_update: ToolUpdateCallback | None = None,
+) -> AgentToolResult:
+    url = str(arguments["url"])
+
+    # Check for cancellation before doing work
+    if signal and signal.is_cancelled():
+        return AgentToolResult(content=[TextContent(text="Cancelled")])
+
+    # Report streaming progress via on_update
+    if on_update:
+        on_update(AgentToolResult(content=[TextContent(text=f"Fetching {url}…")]))
+
+    # Simulate async work
+    await asyncio.sleep(0.1)
+    return AgentToolResult(content=[TextContent(text=f"Content of {url}")])
+
+
+fetch_tool = AgentTool(
+    name="fetch_url",
+    label="Fetch URL",
+    description="Fetch the contents of a URL.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "The URL to fetch"},
+        },
+        "required": ["url"],
+    },
+    execute_fn=fetch_url,
+)
+```
+
+Pass tools to the harness at construction time via `AgentHarnessConfig.tools`. Tool results are automatically appended to the transcript and fed back to the model — you do not need to manage this yourself.
+
+## Rendering streaming text
+
+`MessageUpdateEvent` carries both the in-progress `AssistantMessage` and a nested `AssistantMessageEvent` from `tau_ai`. For streaming text output, iterate the content blocks of the partial message:
+
+```python
+from tau_agent import MessageUpdateEvent, MessageEndEvent
+from tau_agent.messages import AssistantMessage, TextContent, ThinkingContent, ToolCall
+
+async def render_stream(harness: AgentHarness, text: str) -> None:
+    current_text = ""
+
+    async for event in harness.prompt(text):
+        if isinstance(event, MessageUpdateEvent):
+            msg = event.message
+            if not isinstance(msg, AssistantMessage):
+                continue
+
+            # Accumulate text content from all content blocks
+            new_text = "".join(
+                block.text
+                for block in msg.content
+                if isinstance(block, TextContent)
+            )
+            # Print only the delta since last update
+            if new_text.startswith(current_text):
+                print(new_text[len(current_text):], end="", flush=True)
+            current_text = new_text
+
+        elif isinstance(event, MessageEndEvent):
+            msg = event.message
+            if isinstance(msg, AssistantMessage):
+                # Final message: render thinking summary if present
+                for block in msg.content:
+                    if isinstance(block, ThinkingContent) and block.thinking:
+                        print(f"\n[thinking: {len(block.thinking)} chars]")
+            print()  # Newline to close the streamed line
+            current_text = ""
+```
+
+## Handling steering and follow-ups
+
+If your frontend allows the user to type while the agent is running, queue the input rather than starting a second run:
+
+```python
+from tau_agent import AgentHarness
+
+# In your UI's "submit" handler:
+def on_submit(harness: AgentHarness, text: str) -> None:
+    if harness.is_running:
+        # Insert before the next turn (interrupting)
+        harness.steer(text)
+        # or append after the run would otherwise finish:
+        # harness.follow_up(text)
+    else:
+        asyncio.create_task(consume(harness.prompt(text)))
+```
+
+`harness.steer()` and `harness.follow_up()` both return a `QueuedMessages` snapshot you can use to update a badge or status line:
+
+```python
+queued = harness.steer("Focus on the auth module only.")
+print(f"{queued.count} messages pending")
+```
+
+## Cancellation
+
+Call `harness.cancel()` and keep consuming events — the loop emits a clean `AgentEndEvent` before closing:
+
+```python
+import asyncio
+
+async def run_with_cancel(harness: AgentHarness, prompt: str) -> None:
+    async def watchdog() -> None:
+        await asyncio.sleep(10.0)
+        print("\n[timeout — cancelling]")
+        harness.cancel()
+
+    asyncio.create_task(watchdog())
+
+    async for event in harness.prompt(prompt):
+        render(event)   # keep consuming until stream ends naturally
+```
+
+## Reference: the print-mode renderer
+
+The built-in print mode (`tau -p "..."`) is a reference implementation of a minimal frontend. It iterates the same `CodingSessionEvent` stream and renders to stdout using Rich. Read `tau_coding/print_mode.py` (or the equivalent renderer module in the repo) to see how `MessageUpdateEvent`, `ToolExecutionStartEvent`, and session-level events map to terminal output.
+
+<Tip>
+  The rendering path for `MessageUpdateEvent.assistant_message_event` is where provider-neutral streaming becomes visible text. Start there when diagnosing display issues in a custom frontend.
+</Tip>
+
+## What not to depend on
+
+<Warning>
+  Avoid coupling your frontend to any of the following — they are implementation details that can change:
+  - Private `CodingSession` or `AgentHarness` attributes (those beginning with `_`)
+  - Provider-specific response chunks or raw HTTP events from `tau_ai`
+  - Textual widget internals or `tau_coding.tui.*` private APIs
+  - Raw JSONL session file structure — use `SessionManager` and `session.messages` instead
+  - The `tau_coding.tui.load_tui_settings()` keybinding and theme file — that is built-in app policy; your UI can define its own
+</Warning>
+
+The stable surface is: the `AgentEvent` and `CodingSessionEvent` types, the `AgentHarness` and `CodingSession` public methods, `AgentTool`, `AgentToolResult`, `AgentMessage` variants, and `SessionManager`. Everything else is subject to change.

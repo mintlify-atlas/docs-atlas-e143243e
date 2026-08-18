@@ -1,0 +1,168 @@
+---
+title: "Tau: Terminal Coding Agent for Developers"
+sidebarTitle: "Introduction"
+description: "Tau is a minimalist terminal coding agent you can run, read, and extend — published as tau-ai on PyPI, built in clean Python layers."
+---
+
+Tau is a coding agent that lives in your terminal. You type requests like "explain this repo", "add tests for the parser", or "fix this stack trace" and Tau reads files, runs shell commands, edits code, and streams everything it does back to you — all from a small, honest codebase that is meant to be read as much as it is used.
+
+## What Tau is
+
+Tau is two things at once: a real terminal coding agent you can put to work today, and a teaching project that shows exactly how a coding agent is built — from model streaming and the agent loop, through tools and sessions, to the interactive TUI.
+
+<CardGroup cols={2}>
+  <Card title="A tool you can use" icon="terminal">
+    Interactive TUI, print mode for scripts, durable JSONL sessions, multiple model providers, project instructions, and user skills.
+  </Card>
+  <Card title="A project you can learn from" icon="book-open">
+    Small, readable layers — each package has one job and can be understood independently without wading through a giant production codebase.
+  </Card>
+</CardGroup>
+
+## Key features
+
+Tau ships with a focused set of capabilities out of the box:
+
+- **Interactive TUI** powered by Textual, plus a non-interactive **print mode** (`-p`) for scripts and pipes.
+- **Four built-in coding tools**: `read`, `write`, `edit`, and `bash` — the model decides when to call them.
+- **Durable JSONL sessions** stored under `~/.tau/sessions/` with resume, branching, and export.
+- **Multiple providers**: OpenAI, Anthropic, OpenAI Codex, OpenRouter, Hugging Face, and any OpenAI-compatible endpoint including local models.
+- **Project instructions** loaded automatically from `AGENTS.md`, `.tau/`, and `.agents/` directories.
+- **User skills and prompt templates** for reusable task descriptions you invoke by name.
+- **Context accounting and compaction** — manual (`/compact`) or automatic, so long sessions don't stall.
+- **Thinking modes** on models that support extended reasoning.
+- **Extensions API** for registering custom tools, slash commands, and event listeners.
+
+## Three-layer architecture
+
+Tau is split into three packages that stack cleanly on top of each other. The direction of dependency flows one way only:
+
+```text
+tau_coding  →  tau_agent  →  tau_ai
+```
+
+<AccordionGroup>
+  <Accordion title="tau_ai — provider-neutral streaming" icon="cloud">
+    The innermost layer. Translates model providers (OpenAI, Anthropic, OpenRouter, Hugging Face, and OpenAI-compatible endpoints) into Tau's typed, provider-neutral event stream. Nothing in the outer layers knows about raw API wire formats.
+  </Accordion>
+  <Accordion title="tau_agent — portable agent brain" icon="brain">
+    The middle layer. Owns the reusable `AgentHarness`, the agent loop, typed messages and events, tool definitions, and JSONL session primitives. This package has no dependency on Textual, Rich, CLI frameworks, or Tau's file layout — it can be used as a standalone library.
+  </Accordion>
+  <Accordion title="tau_coding — coding application" icon="code">
+    The outermost layer. Wraps the brain as a real coding agent: the Typer CLI, Textual TUI, file and shell tools (`read`/`write`/`edit`/`bash`), provider configuration, project instructions, skills, slash commands, rendering, and on-disk session management.
+  </Accordion>
+</AccordionGroup>
+
+The important boundary is:
+
+```text
+AgentHarness  = reusable brain  (tau_agent)
+CodingSession = coding-agent environment  (tau_coding)
+TUI           = one possible frontend  (tau_coding)
+```
+
+The core does not know about Textual, Rich, local config paths, slash commands, or rendering. Frontends and the CLI consume events.
+
+## Installation
+
+Tau is published on PyPI as `tau-ai` and installs a `tau` command. Python 3.12 or newer is required.
+
+<Steps>
+  <Step title="Run the installer">
+    The recommended path uses [`uv`](https://docs.astral.sh/uv/) for isolated, reproducible installs. The script installs `uv` first when it is not already present, never uses `sudo`, and verifies the `tau` command before finishing.
+
+    <Tabs>
+      <Tab title="macOS / Linux">
+        ```bash
+        curl -LsSf https://twotimespi.dev/install.sh | sh
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        irm https://twotimespi.dev/install.ps1 | iex
+        ```
+      </Tab>
+    </Tabs>
+
+    You can [inspect the shell installer](https://twotimespi.dev/install.sh) or [PowerShell installer](https://twotimespi.dev/install.ps1) before running it.
+  </Step>
+
+  <Step title="Or install with your package manager">
+    Already have `uv`, `pipx`, or `pip`? Skip the script and install directly:
+
+    <Tabs>
+      <Tab title="uv">
+        ```bash
+        uv tool install tau-ai
+        ```
+      </Tab>
+      <Tab title="pipx">
+        ```bash
+        pipx install tau-ai
+        ```
+      </Tab>
+      <Tab title="pip">
+        ```bash
+        python -m pip install tau-ai
+        ```
+      </Tab>
+      <Tab title="pixi / conda-forge">
+        ```bash
+        pixi global install tau-ai
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Verify the install">
+    ```bash
+    tau --version
+    ```
+
+    You should see output like `tau 0.3.12`. If your shell reports "command not found", restart your terminal session so the updated `PATH` takes effect.
+  </Step>
+
+  <Step title="Keep Tau up to date">
+    For any normal installation, Tau can update itself using whichever installer owns its environment:
+
+    ```bash
+    tau update
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  **Local development checkout** — clone the repo and run Tau directly from source:
+
+  ```bash
+  git clone https://github.com/huggingface/tau.git
+  cd tau
+  uv sync --dev
+  uv run tau --version
+  ```
+
+  To make the checkout available as a global `tau` command:
+
+  ```bash
+  uv tool install --editable --force .
+  ```
+
+  Re-run that command after every `git pull` to refresh installed metadata.
+</Tip>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Install Tau, connect a model provider, and run your first coding session in a few minutes.
+  </Card>
+  <Card title="Core Concepts" icon="layers" href="/concepts">
+    Understand the layered architecture, event stream, AgentHarness, sessions, tools, and extensions.
+  </Card>
+  <Card title="Providers & Models" icon="key" href="/guides/providers-and-models">
+    Add API keys, switch models mid-session, or connect a local OpenAI-compatible endpoint.
+  </Card>
+  <Card title="Sessions" icon="clock-rotate-left" href="/guides/sessions">
+    Resume, branch, and export durable JSONL sessions stored under ~/.tau/sessions/.
+  </Card>
+</CardGroup>

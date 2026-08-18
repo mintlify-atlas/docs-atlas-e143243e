@@ -1,0 +1,147 @@
+---
+title: "Navigating the Tau Interactive Terminal Interface (TUI)"
+sidebarTitle: "TUI"
+description: "Master Tau's terminal UI: transcript layout, session sidebar, command palette, autocomplete, keyboard shortcuts, themes, and turn notifications."
+---
+
+Running `tau` with no arguments — or `tau "initial prompt"` to start with a pre-filled message — opens the interactive terminal UI. This is where most coding work happens. The TUI is built on Textual and divides the screen into three regions: a scrollable **transcript area** showing the full conversation, a **session sidebar** with stats and loaded resources, and a **prompt box** at the bottom where you type.
+
+## Starting the TUI
+
+```bash
+tau                             # open an empty session
+tau "explain the auth module"   # open with an initial prompt pre-filled
+tau --provider anthropic        # open with a specific provider
+tau --session <id>              # resume a previous session
+```
+
+## Sending prompts and steering runs
+
+Type into the prompt box and press **Enter** to submit. **Shift+Enter** inserts a newline for multi-line prompts. While the agent is running you have several options without waiting for it to finish:
+
+- **Esc** — cancel the active run (treated as an intentional stop, not an error).
+- **Enter** (while running) — queue your text as **steering**, extra guidance applied to the current run.
+- **Alt+Enter** (while running) — queue a **follow-up** prompt that waits until the run would otherwise finish.
+- **Up** on an empty prompt (while running) — pull the most recently queued follow-up back into the prompt for editing.
+
+Clicking anywhere in the window returns focus to the prompt, so you can scroll the transcript and keep typing without pressing Tab.
+
+## The command palette and slash commands
+
+Every in-session command starts with `/`. Open the **command palette** with **Ctrl+K** to search and run any command interactively. Commonly used ones:
+
+<CardGroup cols={2}>
+  <Card title="/session" icon="chart-bar">
+    Show model, tools, skills, and full context usage. Text selected in this modal is copied to the clipboard automatically.
+  </Card>
+  <Card title="/model" icon="swap-horizontal">
+    Open the model picker to switch models or providers.
+  </Card>
+  <Card title="/compact" icon="compress">
+    Summarize and shrink the active context window.
+  </Card>
+  <Card title="/resume · /tree" icon="clock-rotate-left">
+    Resume a previous session or branch from history.
+  </Card>
+  <Card title="/prompts" icon="text">
+    Search prompt templates, insert an invocation, or open the template file with Ctrl+E.
+  </Card>
+  <Card title="/hotkeys" icon="keyboard">
+    Show all keyboard shortcuts inline.
+  </Card>
+</CardGroup>
+
+## Keyboard shortcuts overview
+
+<Accordion title="Essential shortcuts at a glance">
+
+| Key | Action |
+|---|---|
+| **Ctrl+K** | Open command palette |
+| **Ctrl+P** | Cycle scoped (favorite) models |
+| **Ctrl+T** | Toggle reasoning token visibility |
+| **Ctrl+O** | Expand/collapse tool output or grouped reads |
+| **Shift+Tab** | Cycle thinking level |
+| **Esc** | Cancel the active run |
+| **Enter** (running) | Queue steering text |
+| **Alt+Enter** (running) | Queue a follow-up prompt |
+| **Shift+Enter** | Insert newline in prompt |
+| **Up** (empty prompt, running) | Retrieve queued follow-up |
+| **Tab** (after `!`/`!!`) | Filename completion |
+
+</Accordion>
+
+For the full authoritative list, run `/hotkeys` inside Tau or see the keyboard shortcuts reference page.
+
+## Referencing files and dropping files
+
+Type `@` in the prompt to open file suggestions from the project tree and insert a path like `@src/app.py`. Use an explicit parent-relative path such as `@../` to complete files outside the project root. Dot-prefixed content like `.env` and `.agents/` is included; Tau skips known metadata directories such as `.git`, `.venv`, `node_modules`, and `__pycache__`.
+
+You can also drag files from your file manager directly onto the terminal window. Tau inserts their filesystem paths into the prompt at the cursor, quoting paths that contain spaces automatically. Any text you already typed is preserved.
+
+## Running shell commands directly
+
+Prefix a command with `!` to run it yourself without asking the model:
+
+- `!<command>` — runs in the session's working directory **and** records the command and output in the conversation context.
+- `!!<command>` — runs it and shows the output **without** adding it to context.
+
+As soon as input starts with `!`, the prompt and its left border turn amber/orange (the same color as an active tool call) and the `τ` prefix becomes `$`, so you can tell at a glance that submitting will execute a shell command.
+
+<Note>
+These commands run in a non-interactive shell, so `~/.zshrc`/`~/.bashrc` aliases are not loaded automatically. To use your own aliases, configure a `shellCommandPrefix` — see the Configuration reference.
+</Note>
+
+## Tool output in the transcript
+
+Tool calls show a static marker in the transcript while they run: orange means in progress, green means success, and red means failure. That status color applies to the semantic description (e.g. `Running tests` or `Read 5 files`); command snippets and file lists stay neutral gray.
+
+Adjacent built-in tool calls from one model response are grouped into a single transcript block — one compact line per logical action. Press **Ctrl+O** to reveal the exact command and full output beneath any tool row. Consecutive file reads or writes from the same response are clustered under one headline with every file path listed.
+
+When a provider request fails after retries, Tau shows the failure as an explicit error block using the provider's own error message, along with a diagnostic log path. You can submit another prompt without starting a new session.
+
+## The session sidebar
+
+On wide-enough terminals, Tau shows the session sidebar on the right (configurable to the left or off via `sidebar_position` in `~/.tau/tui.json`). It contains:
+
+- **Session name** — shown prominently at the top
+- **Turn and tool-call totals** for the active branch
+- **Provider-reported token usage** and estimated cost
+- **Cache hit rates** — latest-request rate and cumulative session rate, shown separately so a cache miss on the most recent request is immediately visible
+- **Automatic-compaction threshold**
+- **Loaded tools, skills, prompt templates, extensions, and context files** (e.g. `AGENTS.md`)
+
+Skills and prompt templates are grouped under their resource origins (`./.tau/skills`, `~/.agents/skills`, etc.) and start collapsed — click the heading or press **Enter** to expand. Model-visible skills use a solid bullet (`•`); user-only skills with `disable-model-invocation: true` use a hollow bullet (`◦`).
+
+The compact status block below the prompt shows `provider:model (thinking)` on its first line and active context as `used/limit` on the second. This describes what Tau expects to send on the next request — it can decrease after compaction while cumulative sidebar usage continues to increase.
+
+<Info>
+The sidebar hides automatically on narrow terminals. The terminal tab title continues to identify the session as `τ | <name>`, and an animated indicator shows when a run is in progress, so you can monitor work from another tab.
+</Info>
+
+## Turn notifications
+
+When a run fully settles while Tau's terminal surface is unfocused, Tau emits a desktop notification by default on supported terminals: OSC 9 for Ghostty, iTerm2, and MinTTY, and OSC 99 for Kitty. Unknown terminals are left untouched.
+
+Set `turn_notification` in `~/.tau/tui.json` to change this behavior:
+
+| Value | Behavior |
+|---|---|
+| `"desktop"` (default) | OSC notification on supported terminals |
+| `"bell"` | Let the terminal mark the tab or apply its configured bell behavior |
+| `"off"` | Disable notifications entirely |
+
+## Themes
+
+Use `/theme` to switch between `tau-dark`, `tau-light`, `high-contrast`, and any custom themes you have installed. Each theme uses one shared selection palette for autocomplete and modal lists. The `/theme` command opens a picker; you can also name a theme directly:
+
+```text
+/theme tau-light
+/theme high-contrast
+```
+
+Custom themes are JSON files dropped into `~/.tau/themes/` (user-global) or `<project>/.tau/themes/` (project-local, wins on name collisions). Themes are discovered at startup; restart Tau after adding or editing a theme file. The active selection is saved in `~/.tau/tui.json`.
+
+## Long sessions
+
+Tau keeps long transcripts responsive by mounting only a window of messages in the terminal at once. When older messages are outside the current window, a small boundary row appears — keep scrolling toward it to page through the rest of the conversation. Paging does not summarize or delete any context; use `/compact` separately when you want to reduce what is sent to the model.

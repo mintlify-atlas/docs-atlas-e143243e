@@ -1,0 +1,111 @@
+---
+title: "Project Trust: Controlling Ambient Repository Inputs"
+sidebarTitle: "Project Trust"
+description: "Understand how Tau gates project-local resources, configure trust scopes, automate decisions, and store saved approvals in trust.json."
+---
+
+When Tau starts in a directory that contains project-local resources, it asks before loading them. This gate exists because project files — skills, prompts, system-prompt overrides, themes, and extensions — are ambient inputs that could be contributed by anyone who commits to a repository. Trust is keyed to the canonical, existing working directory path: symlink aliases share a decision, and the nearest saved parent decision is inherited by subdirectories.
+
+<Warning>
+**Project trust is an input-loading guard, not a sandbox.** It does not restrict filesystem reads/writes, shell commands, process spawning, network access, tool behavior, model selection, package installation, credential access, or prompt injection. A trusted project may still be malicious. Use an OS sandbox, container, VM, remote environment, and restricted credentials/network when you need genuine isolation.
+</Warning>
+
+## What Is Protected
+
+Before a trust decision is made, Tau detects project-local resources by checking names and metadata only — it never reads, parses, or imports a candidate before deciding. Protected inputs include:
+
+- `AGENTS.md` (plain and scoped), `SYSTEM.md`, and `APPEND_SYSTEM.md` — system-prompt context files
+- `.tau/` and `.agents/` skills and prompt templates
+- `.tau/` themes
+- `.tau/extensions/` — project extension candidates
+- `project settings.json` (reserved for future support)
+
+**Not protected:** user resources under `~/.tau/` and `~/.agents/`, built-ins, and paths explicitly passed on the CLI with `-e` or `--append-system-prompt`.
+
+<Note>
+Trusted project extensions additionally require the `--project-extensions` flag. Trust approval alone is not sufficient to load project Python code.
+</Note>
+
+## Interactive Trust Decision
+
+At startup, when Tau detects protected project inputs and no saved decision applies, it shows an interactive modal offering:
+
+- **Trust this exact folder** and save the decision
+- **Trust the displayed immediate parent** and save it (useful for a monorepo root)
+- **Trust for this run only** (run-only approval, not saved)
+- **Decline this exact folder** and save the decision
+- **Decline for this run only**
+
+Pressing Escape or cancelling **exits Tau** during startup without loading the project. During `/reload` or cross-project session replacement, cancellation preserves the current session snapshot and keeps Tau open.
+
+A child decision always overrides an inherited parent decision. Tau displays the exact parent path before selection when offering parent trust, so you know exactly what scope you are saving.
+
+## Saved Decisions: trust.json
+
+Saved decisions live in `~/.tau/trust.json`, format version 1. Tau validates the entire file on every read and updates it under a file lock with restrictive permissions and atomic replacement.
+
+If the trust store is malformed, unreadable, locked, or unwritable, **no saved trust is granted** — run-only approval with `--approve` remains available.
+
+There is no automatic cleanup when a project moves. If you rename or move a trusted directory, the saved entry for the old path becomes stale; the new path will prompt again on first use.
+
+## Headless and Automation Behavior
+
+Print mode, `--mode json`, `--mode transcript`, and other headless paths never show an interactive trust prompt. Their behavior follows the `defaultProjectTrust` setting in `~/.tau/settings.json`:
+
+| `defaultProjectTrust` value | Headless result |
+|---|---|
+| `ask` (default) | Decline — protected inputs are not loaded |
+| `always` | Approve — protected inputs are loaded |
+| `never` | Decline — protected inputs are not loaded |
+
+Trust diagnostics are written to **stderr** in structured modes so stdout remains machine-readable. Diagnostics report bounded category counts and decision-source information — never protected file contents.
+
+To set the global default:
+
+```json
+{
+  "defaultProjectTrust": "always"
+}
+```
+
+Save this to `~/.tau/settings.json`. The `ask` default is the safest choice for general use.
+
+## Run-Only Flags
+
+`--approve` (`-a`) and `--no-approve` (`-na`) are mutually exclusive, apply only to the current invocation, and **never edit `trust.json`**:
+
+```bash
+# Trust this project for one run only
+tau -a -p "review the codebase"
+
+# Explicitly decline project inputs for one run
+tau -na
+
+# Combine with print mode and a specific session
+tau -a --mode json "audit the API surface"
+```
+
+These flags work in both interactive and non-interactive (print/mode) sessions.
+
+## The `/reload` Command and Trust
+
+`/reload` re-detects project resources from scratch. An initially empty project that gains protected inputs between sessions requires a new trust decision — Tau never infers durable trust from an earlier empty state.
+
+When trust is declined:
+- Tau builds a **global/explicit-only** resource snapshot using only `~/.tau/`, `~/.agents/`, and explicitly passed CLI paths
+- The session proceeds without project skills, prompts, themes, or extensions
+
+When resuming a session with `--session` or branching, Tau resolves the destination record's canonical cwd independently — it does not reuse the source project's trust outcome.
+
+## Security Boundary Summary
+
+<CardGroup cols={2}>
+  <Card title="What Trust Controls" icon="shield-check">
+    Loading of project-local Markdown, JSON, and Python from `.tau/` and `.agents/` directories in your working directory.
+  </Card>
+  <Card title="What Trust Does Not Control" icon="shield-xmark">
+    Filesystem access, shell commands, network requests, tool behavior, model choice, credential access, package installation, or prompt injection from already-loaded content.
+  </Card>
+</CardGroup>
+
+For genuine process isolation, combine Tau with OS-level containers, restricted network rules, minimal credentials, and a remote or sandboxed execution environment.

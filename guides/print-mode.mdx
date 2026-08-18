@@ -1,0 +1,170 @@
+---
+title: "Non-Interactive Print Mode for Scripts and CI"
+sidebarTitle: "Print Mode"
+description: "Run Tau headlessly with -p or --mode for scripts, pipes, and CI. Choose text, JSON, transcript, or RPC output formats."
+---
+
+Print mode runs a single prompt without the interactive TUI and writes the result directly to the terminal or a pipe. It uses the same full coding-session environment as the TUI — the same tools, project context, and session storage — so turns are saved under `~/.tau/sessions/` and can be resumed later. This makes it the right choice for scripts, pipelines, CI automation, and one-off questions.
+
+## Basic Usage
+
+```bash
+tau -p "summarize the changes in the last commit"
+```
+
+The `-p` / `--print` flag activates print mode. The prompt is a plain positional argument, identical to an initial prompt in the TUI. Put flags **before** the prompt; Tau treats anything after the last recognized flag as prompt text, including tokens that look like flags:
+
+```bash
+tau -p --mode json "list the public functions in src/app.py"
+```
+
+## Output Formats
+
+Use `--mode` to choose how results are written. Passing `--mode` alone also switches Tau into non-interactive mode, so `-p` is optional when `--mode` is set:
+
+<Tabs>
+  <Tab title="text (default)">
+    Human-readable output with ANSI/Rich styling. Best for reading in a terminal.
+
+    ```bash
+    tau -p --mode text "explain the session storage design"
+    # or simply:
+    tau -p "explain the session storage design"
+    ```
+  </Tab>
+  <Tab title="json">
+    Structured JSON events, suitable for piping into other tools or parsing programmatically.
+
+    ```bash
+    tau --mode json "list the public functions in src/app.py"
+    ```
+  </Tab>
+  <Tab title="transcript">
+    A structured record of the entire conversation turn — user message, assistant response, and tool calls.
+
+    ```bash
+    tau -p --mode transcript "review the current changes"
+    ```
+  </Tab>
+  <Tab title="rpc">
+    A persistent JSONL RPC protocol session, compatible with Pi's RPC mode. Reads commands from stdin; does not accept a positional prompt.
+
+    ```bash
+    tau --mode rpc
+    ```
+  </Tab>
+</Tabs>
+
+## Piping Stdin
+
+Piped stdin is merged into the prompt, so you can feed file or command output in directly:
+
+```bash
+cat README.md | tau -p "Summarize this text"
+```
+
+A piped body can also be the **entire** prompt — `tau -p` with no positional text and piped stdin is valid:
+
+```bash
+cat README.md | tau -p
+```
+
+When stdin is not a terminal, Tau prepends the piped content to any positional prompt text, separated by a blank line.
+
+## Choosing Provider, Model, and Directory
+
+The same selection flags work in print mode:
+
+```bash
+# Use a specific model
+tau -m gpt-4o -p "explain this module"
+
+# Use a specific provider
+tau --provider local -p "explain this module"
+
+# Operate in a different directory
+tau --cwd ./services/api -p "audit for secrets"
+```
+
+## Resuming a Session
+
+Pass an existing session ID to run a follow-up turn non-interactively:
+
+```bash
+tau --print --session <session-id> "Follow-up message"
+```
+
+Tau appends the turn to the existing transcript and sends the active conversation history to the model. It also uses the session's saved working directory, provider, and model unless explicit selection flags override them. Unknown IDs fail without creating a session.
+
+<Note>
+`--session` cannot be combined with `--new-session` or `--session-id`. Use `tau sessions` to find existing session IDs.
+</Note>
+
+## Controlling the Session ID
+
+Automation can choose the exact ID of a new print-mode session with `--session-id`. This keeps stdout dedicated to the selected output format and avoids scanning `~/.tau/sessions/`:
+
+```bash
+worker_session_id="$(python -c 'import uuid; print(uuid.uuid4().hex)')"
+tau --print --new-session \
+  --session-id "$worker_session_id" \
+  --cwd /path/to/project \
+  "review the current changes"
+printf 'Tau session: %s\n' "$worker_session_id"
+```
+
+Session ID constraints:
+- May contain letters, numbers, `.`, `_`, and `-`
+- Must start and end with a letter or number
+- Maximum 128 bytes
+- `default` and `index` are reserved
+- Tau atomically reserves the transcript and exits with an error rather than opening or overwriting an existing session, even across concurrent workers
+
+`--session-id` applies to `text`, `json`, and `transcript` modes and adds no metadata to stdout.
+
+## Exit Status
+
+Print mode exits non-zero when the run fails, making it composable in shell scripts:
+
+```bash
+if tau --mode text -p "do the tests pass? answer yes or no" | grep -qi yes; then
+  echo "looks good"
+fi
+```
+
+## CI and Automation Patterns
+
+<CardGroup cols={2}>
+  <Card title="Code Review in CI" icon="magnifying-glass">
+    ```bash
+    tau --mode text -p \
+      "review the staged diff for issues"
+    ```
+  </Card>
+  <Card title="Structured Output Parsing" icon="brackets-curly">
+    ```bash
+    tau --mode json \
+      "list exported functions in src/" \
+      | jq '.[]'
+    ```
+  </Card>
+  <Card title="Piped File Analysis" icon="file-lines">
+    ```bash
+    cat error.log | tau -p \
+      "what is causing these errors?"
+    ```
+  </Card>
+  <Card title="Multi-Turn Automation" icon="arrows-rotate">
+    ```bash
+    SESSION_ID="ci-$(git rev-parse --short HEAD)"
+    tau --print --session-id "$SESSION_ID" \
+      "run the tests and report failures"
+    tau --print --session "$SESSION_ID" \
+      "fix any failures you found"
+    ```
+  </Card>
+</CardGroup>
+
+<Tip>
+For interactive work — streaming output, steering mid-run, session branching, and pickers — start the TUI instead. Print mode is intentionally minimal: one prompt, one response, structured output.
+</Tip>

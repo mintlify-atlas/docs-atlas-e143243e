@@ -1,47 +1,219 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Tau in Minutes"
+sidebarTitle: "Quickstart"
+description: "Install Tau, connect an AI provider, run your first coding session, and explore print mode — everything you need to get up and running fast."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide takes you from a clean machine to a working Tau session. It covers installation, connecting a model provider, running interactive and one-shot prompts, and what to try next. The whole thing should take under five minutes.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Install Tau">
+    Tau is published as `tau-ai` on PyPI and requires Python 3.12 or newer. The recommended installers use [`uv`](https://docs.astral.sh/uv/) and will install it automatically if it is not already present. They never use `sudo` and verify the `tau` command before finishing.
+
+    <Tabs>
+      <Tab title="macOS / Linux">
+        ```bash
+        curl -LsSf https://twotimespi.dev/install.sh | sh
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        irm https://twotimespi.dev/install.ps1 | iex
+        ```
+      </Tab>
+      <Tab title="uv / pipx / pip">
+        ```bash
+        uv tool install tau-ai
+        # or
+        pipx install tau-ai
+        # or
+        python -m pip install tau-ai
+        ```
+      </Tab>
+      <Tab title="pixi / conda-forge">
+        ```bash
+        pixi global install tau-ai
+        ```
+      </Tab>
+    </Tabs>
+
+    Confirm the install succeeded:
 
     ```bash
-    npm install your-package
+    tau --version
     ```
+
+    ```text
+    tau 0.3.12
+    ```
+
+    <Note>
+      If your shell reports "command not found" after installing, open a new terminal window so the updated `PATH` takes effect, then try again.
+    </Note>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Navigate to your project">
+    Tau uses your current directory as the working root for all file and shell operations. Always start Tau from inside the project you want it to work on.
 
     ```bash
-    your-cli init
+    cd my-project
     ```
+
+    <Tip>
+      You can also pass `--cwd` to point Tau at a different directory without changing your shell's working directory:
+
+      ```bash
+      tau --cwd /path/to/other-project
+      ```
+    </Tip>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Start Tau">
+    Launch the interactive terminal UI by running `tau` with no arguments:
 
     ```bash
-    your-cli start
+    tau
     ```
+
+    The TUI opens in your terminal. You will see the Tau header, a status bar showing the active model and provider, and a prompt input at the bottom of the screen.
+
+    A few key bindings to know right away:
+
+    | Key | Action |
+    |-----|--------|
+    | **Enter** | Submit your prompt |
+    | **Esc** | Cancel the current agent run |
+    | **Ctrl+K** | Open the command palette |
+    | **Ctrl+D** | Quit Tau |
+  </Step>
+
+  <Step title="Connect a model provider with /login">
+    Tau needs an AI model to talk to. If you haven't connected one yet, the session will prompt you. Use the `/login` slash command inside Tau to authenticate:
+
+    ```text
+    /login
+    ```
+
+    This opens a provider picker. You can also jump straight to a specific provider:
+
+    ```text
+    /login openai
+    /login anthropic
+    /login openai-codex
+    ```
+
+    Tau ships with built-in entries for **OpenAI**, **Anthropic**, **OpenAI Codex**, **OpenRouter**, and **Hugging Face**. For OpenAI you will be prompted to paste your API key; for Codex you go through browser-based OAuth.
+
+    After login, check your active provider and model:
+
+    ```text
+    /model
+    ```
+
+    <Note>
+      Provider credentials are stored securely under `~/.tau/`. You only need to run `/login` once per provider — Tau reloads your credentials automatically on future sessions.
+    </Note>
+  </Step>
+
+  <Step title="Type your first prompt">
+    With a provider connected, type a request and press **Enter**. Good first prompts:
+
+    ```text
+    explain what this project does
+    ```
+
+    Tau streams its response. When it needs to read files or run commands to answer you, it does so and streams each tool call as it happens:
+
+    ```text
+    ● read  src/main.py
+    ● bash  find . -name "*.py" | head -20
+    ```
+
+    Try a prompt that actually changes code:
+
+    ```text
+    add a docstring to every function in src/utils.py
+    ```
+
+    You will see `read` and `edit` calls stream past, then the agent's summary of what it changed.
+
+    <Tip>
+      Tau keeps every session. When you quit, it prints a session ID you can use to resume:
+
+      ```text
+      To resume this session: tau --session abc123def456
+      ```
+    </Tip>
+  </Step>
+
+  <Step title="Try print mode for one-shot prompts">
+    Print mode runs a single prompt non-interactively and writes the result to stdout — useful for scripts, pipelines, and quick lookups.
+
+    ```bash
+    tau -p "summarize the changes in the last commit"
+    ```
+
+    You can also point it at a specific directory without `cd`-ing first:
+
+    ```bash
+    tau --cwd /path/to/project -p "find the CLI entry point"
+    ```
+
+    Pipe content in via stdin and Tau will prepend it to your prompt:
+
+    ```bash
+    cat error.log | tau -p "what is causing this error?"
+    ```
+
+    For structured output, pass `--mode json`, `--mode transcript`, or `--mode text` (the default):
+
+    ```bash
+    tau --mode json -p "list all public functions in src/api.py"
+    ```
+
+    <Note>
+      Print mode saves its session to disk just like interactive mode. You can resume a print-mode session in the TUI later with `tau --session <id>`.
+    </Note>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Come back to a session
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Tau saves every session as an append-only JSONL file under `~/.tau/sessions/`. To list all sessions for the current directory:
+
+```bash
+tau sessions
+```
+
+Resume a session by its ID in the TUI:
+
+```bash
+tau --session abc123def456
+```
+
+Or pick from a list inside the TUI with `/resume`. See the [Sessions guide](/guides/sessions) for branching from any earlier point and exporting to HTML or JSONL.
+
+## Upgrade Tau
+
+For any normal installation, Tau detects and uses the installer that owns its environment:
+
+```bash
+tau update
+```
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="layers" href="/concepts">
+    Understand the architecture, event stream, AgentHarness, sessions, tools, and extensions.
+  </Card>
+  <Card title="Providers & Models" icon="key" href="/guides/providers-and-models">
+    Switch models mid-session, add a custom endpoint, or run a local model.
+  </Card>
+  <Card title="Sessions" icon="clock-rotate-left" href="/guides/sessions">
+    Resume, branch, and export your durable session history.
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Full list of flags, subcommands, slash commands, and key bindings.
+  </Card>
+</CardGroup>

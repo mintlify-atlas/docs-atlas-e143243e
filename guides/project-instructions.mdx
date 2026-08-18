@@ -1,0 +1,145 @@
+---
+title: "Project Instructions: AGENTS.md, SYSTEM.md, and Resources"
+sidebarTitle: "Project Instructions"
+description: "Give Tau standing project context via AGENTS.md, .tau/ and .agents/ resource directories, SYSTEM.md, and APPEND_SYSTEM.md — all loaded after project trust."
+---
+
+Tau discovers instruction files and resource directories automatically and includes them in the system prompt for every turn. This lets you give the agent durable, project-specific context — conventions to follow, commands to run, things to avoid — without repeating yourself every session.
+
+## AGENTS.md
+
+An **`AGENTS.md`** file is the primary way to give the agent project-level standing instructions. Tau wraps its contents in `<project_context>` tags and includes them in the system prompt for every turn. Keep it focused on what the agent needs to know:
+
+- How to run tests, lint, build, and format
+- Project conventions (style, commit message format, branch naming)
+- Architectural notes and gotchas
+- "Always do X / never do Y" rules
+
+Because `AGENTS.md` is included in every turn's prompt, it counts against the context budget — keep entries precise rather than exhaustive.
+
+<Note>
+Tau itself uses an `AGENTS.md` at the repo root — a real example of the format in practice.
+</Note>
+
+## Discovery order
+
+Tau discovers instruction files in the following order. User-level files (`~/.tau/` and `~/.agents/`) are always eligible; project-level files are included only after the active working directory's [project-trust decision](/guides/project-trust).
+
+```text
+~/.tau/AGENTS.md
+~/.agents/AGENTS.md
+<project root>/AGENTS.md
+<project root>/.../<cwd>/AGENTS.md   # ancestor dirs between root and cwd
+<cwd>/.tau/AGENTS.md
+<cwd>/.agents/AGENTS.md
+```
+
+The **project root** is the nearest ancestor directory containing a marker such as `.git`, `pyproject.toml`, `uv.lock`, `setup.py`, or `package.json`.
+
+This layering lets you keep personal global instructions in `~/.tau/` or `~/.agents/`, project-wide rules in the repo's root `AGENTS.md`, and narrower rules in a subdirectory closer to where you are working.
+
+## .tau/ and .agents/ resources
+
+Beyond `AGENTS.md`, Tau loads additional resources from `.tau/` and `.agents/` directories at both the user level and the project level.
+
+<Accordion title=".tau/ directory layout">
+
+```text
+~/.tau/                    # user-level (always loaded)
+  AGENTS.md
+  SYSTEM.md                # replaces the built-in system prompt
+  APPEND_SYSTEM.md         # appended to the system prompt
+  skills/                  # reusable skill definitions
+  prompts/                 # prompt templates
+  themes/                  # custom TUI themes
+  catalog.toml             # provider/model catalog overlay
+  providers.json           # runtime provider preferences
+  credentials.json         # saved API credentials (0600)
+  trust.json               # project trust decisions
+  tui.json                 # TUI display settings
+
+<project>/.tau/            # project-level (loaded after trust)
+  AGENTS.md
+  SYSTEM.md
+  APPEND_SYSTEM.md
+  skills/
+  prompts/
+  themes/
+```
+
+</Accordion>
+
+<Accordion title=".agents/ directory layout">
+
+```text
+~/.agents/                 # user-level (always loaded)
+  AGENTS.md
+  skills/
+  prompts/
+
+<project>/.agents/         # project-level (loaded after trust)
+  AGENTS.md
+  skills/
+  prompts/
+```
+
+</Accordion>
+
+### SYSTEM.md
+
+Placing a `SYSTEM.md` file in `.tau/` **replaces** the built-in system prompt entirely. Use this when you want full control over the instructions the model receives. This is an advanced option — the built-in system prompt includes important tool usage guidance that you will need to replicate if you replace it.
+
+### APPEND_SYSTEM.md
+
+Placing an `APPEND_SYSTEM.md` file in `.tau/` **appends** content to the end of the system prompt without replacing it. This is the safer option for most customization — you keep all the built-in guidance and add your own instructions at the end.
+
+<Tip>
+Use `APPEND_SYSTEM.md` for most customization and reserve `SYSTEM.md` only for cases where you need to fully replace the system prompt, such as when building a specialized tool on top of Tau.
+</Tip>
+
+## Project trust requirement
+
+Project-level resource files (anything discovered because of the active working directory) are loaded only after a **project trust decision**. Tau asks interactively at startup whether you trust the project's files.
+
+<Warning>
+Project trust is an input-loading guard, not a sandbox. It controls whether Tau reads project-level instruction files — it does not restrict filesystem access, shell commands, network requests, or other agent actions. A trusted project may still contain malicious instructions.
+</Warning>
+
+Trust decisions are saved to `~/.tau/trust.json`. Options at the trust prompt:
+
+- Trust this exact folder and save the decision
+- Trust the immediate parent folder and save the decision
+- Trust for this run only
+- Decline for this run only
+- Decline and save the decision
+
+The `--approve` / `-a` flag approves project trust for one invocation without saving. `--no-approve` / `-na` declines without saving. Headless modes (print, JSON, transcript) never prompt; their behavior follows the user-global `defaultProjectTrust` setting (`ask` declines by default).
+
+## Reloading after edits
+
+If you change an `AGENTS.md`, `SYSTEM.md`, or any other instruction file while the TUI is open, run `/reload` to refresh project context for future turns:
+
+```text
+/reload
+```
+
+If you add the first protected file to a previously empty project, `/reload` triggers a new trust resolution rather than silently inheriting the previous empty snapshot. The TUI stays open during trust resolution on reload — cancellation preserves the current session and keeps Tau running.
+
+## CLI overrides
+
+You can supply system prompt content directly from the command line, bypassing the file-based discovery:
+
+```bash
+tau --system-prompt "You are a senior Go engineer. Always prefer stdlib."
+tau --append-system-prompt "Never modify files in the vendor/ directory."
+```
+
+`--system-prompt` replaces the entire system prompt (equivalent to `SYSTEM.md` but supplied on the command line). `--append-system-prompt` appends text to the system prompt (equivalent to `APPEND_SYSTEM.md`). These flags take effect for the duration of the invocation and are not saved.
+
+## Skills and prompt templates
+
+The `.tau/skills/` and `.agents/skills/` directories hold **skill definitions** — reusable instruction sets that Tau loads into the system prompt's skill index. The model can invoke skills by name; full skill instructions enter context only when that skill is invoked.
+
+The `.tau/prompts/` and `.agents/prompts/` directories hold **prompt templates** that you can search and insert with `/prompts`. Press **Ctrl+E** on a template in the picker to open it for editing.
+
+In the TUI sidebar, skills and prompt templates are grouped under their resource origins and start collapsed. The skills heading shows the estimated token cost of the loaded skill index; expand the section to see individual skill names. Model-visible skills use a solid bullet (`•`); user-only skills (with `disable-model-invocation: true`) use a hollow bullet (`◦`).

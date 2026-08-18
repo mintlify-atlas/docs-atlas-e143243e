@@ -1,0 +1,80 @@
+---
+title: "In-Session Slash Commands for the Tau TUI"
+sidebarTitle: "Slash Commands"
+description: "Every slash command available inside the interactive Tau TUI — session control, export, model switching, themes, skills, and more."
+---
+
+Slash commands are typed directly into the Tau TUI prompt and are processed locally before reaching the model. They control session state, tools, and configuration without consuming context tokens. Open the searchable **command palette** with <kbd>Ctrl+K</kbd> to discover and search commands interactively.
+
+## Command Reference
+
+| Command | Arguments | Description |
+|---|---|---|
+| `/quit` | — | Exit the current session |
+| `/new` | — | Start a fresh session |
+| `/session` | — | Show session info and stats: model, working directory, active tools, loaded skills, and context usage |
+| `/system` | — | Display the active system prompt without adding it to context or session history |
+| `/compact` | `[instructions]` | Summarize and compact the active context window. Optional instructions guide what to preserve. |
+| `/export` | `[--format html\|jsonl] [dest]` | Export the current session. Defaults to HTML in the current directory. |
+| `/resume` | `[session-id]` | Resume a previous session by id, or open the session picker to choose one |
+| `/tree` | — | Branch the conversation from an earlier point in the session tree |
+| `/name` | `<new-name>` | Rename the current session and, in supported terminals, update the terminal tab title |
+| `/model` | — | Open the interactive model picker |
+| `/tools` | — | Browse active tools and open their full descriptions |
+| `/scoped-models` | — | Choose favorite models for the <kbd>Ctrl+P</kbd> quick-cycle |
+| `/theme` | `[name]` | Show the current TUI theme, or set a new one by name |
+| `/login` | `[provider]` | Connect a built-in provider with OAuth or an API key. For Anthropic, use `anthropic-subscription` or `anthropic-api`. |
+| `/logout` | `[provider]` | Remove saved credentials for a provider |
+| `/reload` | — | Reload local skills, prompt templates, extensions, and project context from disk |
+| `/prompts` | — | Search loaded prompt templates. Press <kbd>Enter</kbd> to insert an invocation into the prompt, or <kbd>Ctrl+E</kbd> to open the template file for editing. |
+| `/hotkeys` | — | Display all current keyboard shortcuts |
+| `/skills` | — | Open a searchable picker of loaded skills and insert a selection into the prompt |
+| `/skill:<name>` | `[request]` | Expand a named skill into the prompt and run it as a turn |
+
+## Export Formats
+
+`/export` creates a self-contained artifact from the current session.
+
+<Tabs>
+  <Tab title="HTML (default)">
+    The HTML export is a self-contained file with a rendered transcript, a collapsible system-prompt section, and a **Usage** view that charts token and cache activity. The prompt-input chart marks compactions, model changes, thinking-level changes, and branch summaries against the next model request so cache changes have full session context.
+
+    ```text
+    /export
+    /export ~/reports/session.html
+    /export --format html ~/reports/
+    ```
+
+    <Warning>
+      The HTML export includes the active system prompt in a collapsed section. Review it before sharing — it may expose project instructions or other local context.
+    </Warning>
+  </Tab>
+  <Tab title="JSONL">
+    JSONL exports contain the raw session transcript entries and do not include the system prompt.
+
+    ```text
+    /export --format jsonl
+    /export --format jsonl ~/transcripts/session.jsonl
+    ```
+  </Tab>
+</Tabs>
+
+## Skills and Prompt Templates
+
+<Note title="/skill: is a prompt-expansion path, not a command">
+  `/skill:<name>` expands a loaded skill into your prompt and runs it as a turn — it is **not** a normal slash command. The optional request text may start on the same line as the skill name or on following lines. See [Skills & prompt templates](/guides/skills-and-prompts) for how to create and load skills.
+</Note>
+
+Use `/skills` to browse available skills interactively. Use `/prompts` to search loaded prompt templates — pressing <kbd>Enter</kbd> inserts the invocation without submitting it, so you can review or edit before running.
+
+## Thinking Mode
+
+Thinking mode (extended reasoning) is controlled by keyboard shortcuts, not slash commands. Use <kbd>Shift+Tab</kbd> to cycle through thinking levels and <kbd>Ctrl+T</kbd> to toggle the display of reasoning tokens. See [Keyboard shortcuts](/reference/keybindings) and [Managing context](/guides/context#thinking-modes) for details.
+
+## How Commands Are Routed
+
+Only registered slash commands are consumed locally. Any other slash-prefixed input — including absolute paths like `/tmp/file.txt` or `/Users/me/project` — is passed to the model as a normal prompt. This means you can freely reference file paths starting with `/` in your prompts without triggering command handling.
+
+<Tip>
+  Use <kbd>Ctrl+K</kbd> to open the command palette for a searchable, filterable view of all commands with inline descriptions. This is the fastest way to discover less-used commands.
+</Tip>

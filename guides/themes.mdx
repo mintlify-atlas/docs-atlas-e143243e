@@ -1,0 +1,219 @@
+---
+title: "Customizing the TUI with Themes and Color Palettes"
+sidebarTitle: "Themes"
+description: "Switch between built-in themes, create custom JSON palette files, and persist your selection in ~/.tau/tui.json."
+---
+
+Tau's TUI is fully themeable through JSON files. Three built-in themes ship with the package — `tau-dark`, `tau-light`, and `high-contrast` — and you can create custom themes by dropping a `.json` file into a theme directory. The built-in themes serve as reference examples because they load through the same parser as custom themes.
+
+## Built-In Themes
+
+<CardGroup cols={3}>
+  <Card title="tau-dark" icon="moon">
+    The default theme. Deep black background (`#000000`) with cool slate text (`#d8dee9`) and teal accents (`#a7f3f0`). Best for low-light environments.
+  </Card>
+  <Card title="tau-light" icon="sun">
+    White background (`#ffffff`) with near-black text (`#111827`) and teal/blue accents. Best for bright environments or printed output.
+  </Card>
+  <Card title="high-contrast" icon="circle-half-stroke">
+    Pure black background with pure white text and high-chroma role borders (cyan user, green assistant, yellow tool). Designed for accessibility.
+  </Card>
+</CardGroup>
+
+## Switching Themes
+
+Use the `/theme` command from the TUI prompt:
+
+```text
+/theme              # open the theme picker (lists all available themes)
+/theme tau-light    # switch to tau-light immediately
+/theme high-contrast
+```
+
+Your selection is persisted in `~/.tau/tui.json` under the `theme` key and restored on the next startup. You can also switch themes through Textual's native command palette.
+
+## Adding a Custom Theme
+
+Drop a `.json` file into one of two theme directories:
+
+| Directory | Scope |
+|---|---|
+| `~/.tau/themes/` | Available in every project |
+| `<project>/.tau/themes/` | Project-local; wins over user directory on name collisions |
+
+Themes are discovered at **startup**. Restart Tau after adding or editing a theme file. Invalid theme files are skipped with a startup notice — they never prevent Tau from starting.
+
+## Theme JSON Format
+
+The following example shows the complete structure, using `tau-dark` as reference:
+
+```json
+{
+  "name": "tau-dark",
+  "dark": true,
+  "syntax_theme": "ansi_dark",
+  "colors": {
+    "screen_background": "#000000",
+    "screen_text": "#d8dee9",
+    "chrome_background": "#000000",
+    "chrome_text": "#d8dee9",
+    "muted_text": "#667085",
+    "sidebar_background": "#000000",
+    "border": "#141922",
+    "transcript_background": "#000000",
+    "prompt_background": "#101419",
+    "prompt_text": "#e5e7eb",
+    "prompt_border": "#2d3748",
+    "autocomplete_background": "#000000",
+    "accent": "#a7f3f0",
+    "success": "#9cffb1",
+    "error": "#ff4f4f",
+    "tool_success_text": "#9cffb1",
+    "tool_error_text": "#ff4f4f",
+    "highlight_background": "#a7f3f0",
+    "highlight_text": "#061a1a",
+    "markdown_heading": "#a7f3f0",
+    "markdown_table_header": "#7b7b7b",
+    "markdown_table_border": "#7b7b7b",
+    "markdown_inline_code": "#759e95",
+    "markdown_code_block_background": "#161b21",
+    "markdown_link": "#93c5fd",
+    "markdown_bullet": "#a7f3f0",
+    "completion_selected": "bold #061a1a on #a7f3f0",
+    "completion_selected_description": "#061a1a on #a7f3f0",
+    "completion_description": "#667085"
+  },
+  "roles": {
+    "user":               { "border": "#7c8ea6", "body": "#d8dee9 on #101419" },
+    "assistant":          { "border": "#6ea6a0", "body": "#d8dee9 on #000000" },
+    "tool":               { "border": "#8a7a52", "body": "#cbd5e1 on #000000" },
+    "error":              { "border": "#ff4f4f", "body": "#ffb4b4 on #000000" },
+    "status":             { "border": "#526070", "body": "#aab4c2 on #000000" },
+    "thinking":           { "border": "#4b5563", "body": "#9ca3af on #000000" },
+    "skill":              { "border": "#b48ead", "body": "#e5d4ef on #000000" },
+    "custom":             { "border": "#6ea6a0", "body": "#d8dee9 on #000000" },
+    "branch_summary":     { "border": "#c084fc", "body": "#e9d5ff on #000000" },
+    "compaction_summary": { "border": "#c084fc", "body": "#e9d5ff on #000000" }
+  }
+}
+```
+
+### Top-Level Fields
+
+<ParamField path="name" type="string" required>
+  Unique theme identifier. Must not contain `/`. Cannot shadow a built-in theme name (`tau-dark`, `tau-light`, `high-contrast`).
+</ParamField>
+
+<ParamField path="dark" type="boolean">
+  Whether the theme is dark. Defaults from the luminance of `screen_background`. Controls dark-vs-light rendering details such as tool-result colors.
+</ParamField>
+
+<ParamField path="syntax_theme" type="string">
+  Pygments style name for fenced code blocks, or `"ansi_dark"` / `"ansi_light"`. Defaults from `dark`.
+</ParamField>
+
+<ParamField path="vars" type="object">
+  Named color aliases. Any whitespace-separated token in a `colors` or `roles` value that matches a var name is replaced by its value, so compound Rich styles like `"bold base on teal"` work. Var names that collide with Rich style keywords (`on`, `bold`, `dim`, …) are rejected, and var values must be single color tokens.
+</ParamField>
+
+<ParamField path="colors" type="object" required>
+  Every field of the theme palette (see full list below). All fields are required.
+</ParamField>
+
+<ParamField path="roles" type="object" required>
+  `border` and `body` styles for each transcript role (see list below). All roles are required.
+</ParamField>
+
+### Color Fields
+
+All fields in `colors` are required. Use six-digit hex (`#94e2d5`) for maximum compatibility — it is accepted by both Rich and Textual. Library-specific syntax such as Rich's `bright_red` / `grey50` or Textual's `ansi_red` / `#ff000080` is rejected, **except** in the Rich-only `tool_success_text` / `tool_error_text` fields and the `completion_*` style strings.
+
+| Field | Purpose |
+|---|---|
+| `screen_background` | Main application background |
+| `screen_text` | Default text color |
+| `chrome_background` | Header/footer chrome areas |
+| `chrome_text` | Header/footer text |
+| `muted_text` | De-emphasized labels and descriptions |
+| `sidebar_background` | Sidebar panel background |
+| `border` | Generic widget border color |
+| `transcript_background` | Transcript area background |
+| `prompt_background` | Prompt input background |
+| `prompt_text` | Prompt input text |
+| `prompt_border` | Prompt input border/focus indicator |
+| `autocomplete_background` | Autocomplete dropdown background |
+| `accent` | Primary accent / highlight color |
+| `success` | Success indicator (used in tool-result borders) |
+| `error` | Error indicator |
+| `tool_success_text` | Rich-only text color for successful tool invocations |
+| `tool_error_text` | Rich-only text color for failed tool invocations |
+| `highlight_background` | Selection highlight background |
+| `highlight_text` | Selection highlight text |
+| `markdown_heading` | Markdown `#` heading color |
+| `markdown_table_header` | Markdown table header text |
+| `markdown_table_border` | Markdown table border lines |
+| `markdown_inline_code` | Inline code text color |
+| `markdown_code_block_background` | Fenced code block background |
+| `markdown_link` | Hyperlink text color |
+| `markdown_bullet` | List bullet color |
+| `completion_selected` | Rich style string for selected autocomplete entry |
+| `completion_selected_description` | Rich style for selected entry's description |
+| `completion_description` | Rich style for unselected entry descriptions |
+
+### Role Fields
+
+Each entry in `roles` requires `border` (the colored bar beside each transcript block) and `body` (a Rich style string that can carry a background, e.g. `"#cdd6f4 on #1e1e2e"`). Body colors also tint the surrounding Textual widget, so they must use formats accepted by both libraries — six-digit hex is always safe.
+
+| Role | When it appears |
+|---|---|
+| `user` | User messages |
+| `assistant` | Assistant (model) responses |
+| `tool` | Tool call and result blocks; completed calls override `border` with `success` or `error` |
+| `error` | Error and failure messages |
+| `status` | Session status and info blocks |
+| `thinking` | Extended thinking / reasoning blocks |
+| `skill` | Skill-expanded prompt blocks |
+| `custom` | Extension custom messages (`send_custom_message`) |
+| `branch_summary` | Branch summary blocks |
+| `compaction_summary` | Context compaction summary blocks |
+
+## Using Variables for a Consistent Palette
+
+The optional `vars` object lets you define named colors and reuse them across `colors` and `roles`:
+
+```json
+{
+  "name": "my-solarized",
+  "dark": true,
+  "vars": {
+    "base":   "#002b36",
+    "text":   "#839496",
+    "teal":   "#2aa198",
+    "yellow": "#b58900"
+  },
+  "colors": {
+    "screen_background": "base",
+    "screen_text":       "text",
+    "accent":            "teal",
+    "prompt_border":     "teal"
+  },
+  "roles": {
+    "user":      { "border": "teal",   "body": "text on base" },
+    "assistant": { "border": "yellow", "body": "text on base" }
+  }
+}
+```
+
+Validation reports **every** problem in a file at once, so a new theme can be fixed in one pass rather than in iterative cycles.
+
+## Persisting the Selected Theme
+
+The active theme name is stored in `~/.tau/tui.json`:
+
+```json
+{
+  "theme": "tau-light"
+}
+```
+
+This file is written automatically when you use `/theme <name>`. You can also edit it directly; Tau reads it at startup. Changes take effect on the next startup or after `/reload`.

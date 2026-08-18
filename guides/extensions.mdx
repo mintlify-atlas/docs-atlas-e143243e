@@ -1,0 +1,455 @@
+---
+title: "Building Tau Extensions with the Full Python API"
+sidebarTitle: "Extensions"
+description: "Extend Tau with plain Python: register custom tools, slash commands, lifecycle hooks, UI dialogs, and custom message rendering."
+---
+
+Extensions are Python modules that customize a running Tau session. They live outside the core codebase and are loaded at startup — or reloaded live with `/reload` — giving you a stable, versioned seam for adding tools, slash commands, system-prompt guidelines, event observers, input/tool interceptors, UI dialogs, and rich message rendering. Every extension defines a single `setup(tau)` entry point that receives the full extension API object.
+
+<Warning>
+Extensions execute arbitrary Python code inside your Tau session. Project extensions (from `<project>/.tau/extensions/`) are disabled by default and require both explicit project trust **and** the `--project-extensions` flag. Project trust is not a process, filesystem, network, credential, or prompt-injection sandbox — it is only an input-loading guard.
+</Warning>
+
+## Quick Start
+
+Create `~/.tau/extensions/hello_tool.py` with the following content, taken directly from the `examples/extensions/hello_tool.py` source:
+
+```python
+"""Minimal Tau extension: one custom tool."""
+
+from tau_agent.messages import TextContent
+from tau_agent.tools import AgentTool, AgentToolResult
+from tau_coding.extensions import ExtensionAPI
+
+
+async def _run_hello(tool_call_id, arguments, signal=None, on_update=None):
+    del tool_call_id, signal, on_update
+    who = str(arguments.get("who", "world"))
+    return AgentToolResult(content=[TextContent(text=f"Hello, {who}!")])
+
+
+def setup(tau: ExtensionAPI) -> None:
+    """Register the hello tool."""
+    tau.register_tool(
+        AgentTool(
+            name="hello",
+            label="hello",
+            description="Greet someone by name.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "who": {"type": "string", "description": "Who to greet."},
+                },
+            },
+            execute_fn=_run_hello,
+            prompt_snippet="Greet someone by name.",
+        )
+    )
+```
+
+Start `tau` and the model can call `hello`. `setup` must be a plain `def` — not `async def`. Event handlers may be sync or async.
+
+## Extension Locations
+
+Tau discovers extensions from three sources:
+
+| Location | When it loads |
+|---|---|
+| `~/.tau/extensions/` | Always (user-global, default) |
+| `<project>/.tau/extensions/` | Only after project approval **and** `--project-extensions` |
+| Any file or directory | With `tau -e PATH` (repeatable) |
+
+Within a directory, all `*.py` files are extensions. A subdirectory containing `extension.py` loads as a package — its sibling modules are importable with relative imports (`from . import helper`). Names starting with `_` are skipped.
+
+For larger extensions with a `src/` layout, declare the entry file in `pyproject.toml`:
+
+```toml
+[tool.tau]
+extensions = ["src/my_ext/extension.py"]
+```
+
+The manifest takes precedence over `extension.py` in the same directory. Each declared file loads as a package rooted at its parent directory, keeping relative imports working. The extension is named after the entry's parent directory (or after the file itself when not named `extension.py`).
+
+<Note>
+`tau -e` on an **entry file** loads it standalone with no package context — relative imports will fail. Once your extension has sibling modules, always pass the directory (or repo root when using a manifest).
+</Note>
+
+Use `--no-extensions` to disable directory discovery entirely; explicit `-e` paths still load. On name conflicts across extensions, tools, or commands, the **first registration wins**.
+
+## The Extension API Reference
+
+```python
+def setup(tau):
+    # Registration
+    tau.register_tool(agent_tool)               # tau_agent.tools.AgentTool
+    tau.register_command("name", handler, description="...")
+    tau.add_prompt_guideline("Never commit directly to main")
+    tau.on("event_name", handler)               # or @tau.on("event_name")
+
+    # Custom message rendering (register in setup; send once running)
+    tau.register_message_renderer("my-ext:status", render_status)
+
+    # Actions — valid once the session is bound, not during setup
+    tau.send_user_message("text", deliver_as="follow_up")  # or "steer"
+    tau.send_custom_message("text", custom_type="my-ext:status", details={...})
+    await tau.append_entry("my-ext:records", {"key": "value"})
+    tau.notify("message", "info")               # "info" | "warning" | "error"
+    tau.set_inference_provider("deepinfra")     # Hugging Face route; None resets
+
+    # Read-only context
+    tau.context.cwd, tau.context.model, tau.context.provider_name
+    tau.context.inference_provider              # Hugging Face route, or None
+    tau.context.session_id, tau.context.system_prompt
+    tau.context.is_running, tau.context.has_ui
+    tau.context.transcript   # parent conversation, deep-copied AgentMessages
+
+    # Interactive UI dialogs (async; no-op defaults in print mode)
+    await tau.context.ui.select("Title", ["a", "b"])   # -> str | None
+    await tau.context.ui.confirm("Title", "message")   # -> bool
+    await tau.context.ui.input("Title", "placeholder") # -> str | None
+    tau.context.ui.notify("message", "info")
+```
+
+Action methods raise `ExtensionError` if called before the session is bound. Register handlers in `setup` and act on events instead.
+
+### Registering Tools
+
+`register_tool` takes a `tau_agent.tools.AgentTool` with a name, label, description, hand-written JSON-schema `parameters`, and an async `execute_fn`:
+
+```python
+async def execute_fn(tool_call_id, arguments, signal=None, on_update=None):
+    ...
+    return AgentToolResult(content=[TextContent(text="result")])
+```
+
+Key `AgentTool` fields:
+
+<AccordionGroup>
+  <Accordion title="prompt_snippet">
+    A string listed in the system prompt's "Available tools" section so the model knows the tool exists.
+  </Accordion>
+  <Accordion title="prompt_guidelines">
+    Usage guidance tied to this specific tool, injected alongside its description.
+  </Accordion>
+  <Accordion title="render_call">
+    A `(arguments) -> str | None` callable that returns a friendly one-line invocation for the TUI instead of raw JSON. Return `None` to fall back to the generic rendering. Errors are swallowed and never crash the UI.
+  </Accordion>
+  <Accordion title="on_update (streaming progress)">
+    If your executor accepts `on_update`, it receives a callback accepting an `AgentToolResult`. Each call becomes a `tool_execution_update` event and drives the TUI's live progress line.
+  </Accordion>
+</AccordionGroup>
+
+Registering a tool with a built-in's name (`read`, `write`, `edit`, `bash`) replaces the built-in.
+
+### Registering Commands
+
+```python
+tau.register_command(
+    "deploy",
+    handler_fn,
+    description="Deploy the current branch",
+    usage="/deploy [env]",
+    aliases=("d",),
+)
+```
+
+Command handlers are **synchronous**, receive `(args: str, context)`, and may return a `str` shown to the user. Built-in commands cannot be overridden. Extension commands appear in TUI autocomplete automatically.
+
+### Adding Prompt Guidelines
+
+For behavioral guidance not tied to any specific tool:
+
+```python
+tau.add_prompt_guideline("Never commit directly to main")
+```
+
+Lines are de-duplicated at prompt-build time. `/reload` rebuilds the prompt when guidelines change.
+
+## Observable Events
+
+Subscribe to events with `tau.on("event_name", handler)` or the decorator form `@tau.on("event_name")`. Handlers receive `(event, context)` and may be sync or async. Use `"agent_event"` to subscribe to the complete stream.
+
+| Event | Key Payload Fields |
+|---|---|
+| `agent_start` | — |
+| `agent_end` | `messages`, `will_retry` |
+| `agent_settled` | — (no retry, compaction, or queued continuation remains) |
+| `turn_start` | `turn_index`, Unix-millisecond `timestamp` |
+| `turn_end` | `turn_index`, `message`, `tool_results` |
+| `message_start` / `message_end` | `message`; usage at `message.usage` |
+| `message_update` | `message`, nested `assistant_message_event` |
+| `tool_execution_start` | `tool_call_id`, `tool_name`, `args` |
+| `tool_execution_update` | call fields plus `partial_result` |
+| `tool_execution_end` | call fields plus `result`, `is_error` |
+| `queue_update` | `steering`, `follow_up` |
+| `compaction_start` | `reason` (`manual`, `threshold`, or `overflow`) |
+| `compaction_end` | `reason`, `result`, `aborted`, `will_retry`, `error_message` |
+| `entry_appended` | persisted session `entry` |
+| `session_info_changed` | session `name` |
+| `thinking_level_changed` | `level` |
+| `auto_retry_start` | `attempt`, `max_attempts`, `delay_ms`, `error_message` |
+| `auto_retry_end` | `success`, `attempt`, `final_error` |
+
+The `turn_start` and `turn_end` events from `tau_coding.extensions` carry session-enriched payloads with `turn_index` and `timestamp`. Here's a real example:
+
+```python
+from tau_coding.extensions import TurnEndEvent, TurnStartEvent
+
+
+def setup(tau):
+    @tau.on("turn_start")
+    def on_turn_start(event: TurnStartEvent, context):
+        context.api.notify(
+            f"turn {event.turn_index} started at {event.timestamp}", "info"
+        )
+
+    @tau.on("turn_end")
+    def on_turn_end(event: TurnEndEvent, context):
+        assert event.turn_index >= 0
+```
+
+## Lifecycle Hooks
+
+Lifecycle hooks fire for session and input events. Unlike observation events, some hooks can intercept and modify behavior by returning a result object.
+
+| Hook | Payload Type | Return Type |
+|---|---|---|
+| `session_start` | `SessionStartEvent(reason)` | — |
+| `session_shutdown` | `SessionShutdownEvent(reason)` | — |
+| `input` | `InputEvent(text)` | `InputHookResult(action, text, message)` |
+| `tool_call` | `ToolCallHookEvent(tool_name, arguments)` | `ToolCallHookResult(block, reason, arguments)` |
+| `tool_result` | `ToolResultHookEvent(tool_name, arguments, result)` | `ToolResultHookResult(content, details)` |
+
+**`session_start`** fires once the host frontend is attached, so handlers can call `tau.notify(...)` or open dialogs and they will actually be seen. The `reason` field is one of `"startup"`, `"reload"`, `"new"`, `"resume"`, or `"branch"`.
+
+**`input`** runs on the raw prompt text before skill/template expansion:
+- `action="transform"` rewrites the text (transforms chain across handlers)
+- `action="handled"` consumes the input without an agent run; `message` is shown as a notification
+
+**`tool_call`** runs before a tool executes. The example extension from `examples/extensions/permission_gate.py` shows how to block dangerous bash commands:
+
+```python
+import re
+from tau_coding.extensions import ExtensionAPI, ToolCallHookEvent, ToolCallHookResult
+
+DANGEROUS_PATTERNS = (
+    re.compile(r"\brm\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+"),
+    re.compile(r"\bgit\s+push\s+--force"),
+    re.compile(r"\bgit\s+reset\s+--hard"),
+    re.compile(r"\bchmod\s+-R\s+777\b"),
+    re.compile(r"\bdd\s+if="),
+    re.compile(r"\bmkfs\b"),
+)
+
+
+def _gate_tool_call(event: ToolCallHookEvent, context) -> ToolCallHookResult | None:
+    del context
+    if event.tool_name != "bash":
+        return None
+    command = str(event.arguments.get("command", ""))
+    for pattern in DANGEROUS_PATTERNS:
+        if pattern.search(command):
+            return ToolCallHookResult(
+                block=True,
+                reason=(
+                    f"command matches guarded pattern `{pattern.pattern}`; "
+                    "ask the user to run it manually if it is intended"
+                ),
+            )
+    return None
+
+
+def setup(tau: ExtensionAPI) -> None:
+    tau.on("tool_call", _gate_tool_call)
+```
+
+Setting `block=True` prevents execution and reports `reason` to the model. Returning `arguments` rewrites the call. A crashing `tool_call` handler **blocks the tool** (fail-safe).
+
+**`tool_result`** can rewrite a result's text `content` or `details` after execution.
+
+## UI Dialogs
+
+`tau.context.ui` provides host-supplied interactive dialogs. All three are `async`:
+
+```python
+choice = await tau.context.ui.select("Deploy to", ["staging", "prod"])
+ok     = await tau.context.ui.confirm("Deploy?", "This ships to production.")
+name   = await tau.context.ui.input("Release name", "e.g. v1.2.0")
+```
+
+| Method | Signature | Returns |
+|---|---|---|
+| `select` | `(title, options, *, timeout=None)` | `str \| None` — chosen option, or `None` if cancelled |
+| `confirm` | `(title, message, *, timeout=None)` | `bool` — `True` only if confirmed |
+| `input` | `(title, placeholder="", *, timeout=None)` | `str \| None` — entered text, or `None` if cancelled |
+
+`timeout` is in **seconds**. When it elapses the dialog auto-dismisses and returns the cancel default (`None`/`False`/`None`).
+
+Without an interactive frontend (print mode, `-p`, tests) every dialog returns its cancel default **immediately**, so extensions can call them unconditionally. Check `tau.context.ui.has_ui` if you need to branch.
+
+Since command handlers are synchronous, they cannot `await` a dialog directly. Spawn a task on the running event loop instead:
+
+```python
+import asyncio
+
+
+def _handler(args, context):
+    async def _menu():
+        choice = await context.api.context.ui.select("Action", ["deploy", "cancel"])
+        if choice and choice != "cancel":
+            context.api.send_user_message(f"run {choice}")
+    asyncio.get_running_loop().create_task(_menu())
+    return None  # any returned text opens a modal the user must dismiss first
+
+
+def setup(tau):
+    tau.register_command("menu", _handler)
+```
+
+## Custom Message Rendering
+
+Register a renderer in `setup`, then send custom messages during the session. The renderer returns a Rich-markup string — never a Textual widget — keeping extensions TUI-toolkit-free:
+
+```python
+from tau_coding.extensions import CustomMessageView, MessageRenderOptions
+
+
+def render_status(view: CustomMessageView, options: MessageRenderOptions) -> str:
+    icon = "[green]✓[/green]" if view.details and view.details.get("ok") else "[red]✗[/red]"
+    line = f"{icon} [bold]{view.content}[/bold]"
+    if options.expanded and view.details:
+        line += f"\n[dim]{view.details}[/dim]"
+    return line  # a Rich-markup string, never a widget
+
+
+def setup(tau):
+    tau.register_message_renderer("my-ext:status", render_status)
+
+
+# Once the session is running:
+tau.send_custom_message(
+    "build finished",
+    custom_type="my-ext:status",
+    details={"ok": True, "duration_ms": 1200},
+)
+```
+
+`send_custom_message` parameters:
+
+<ParamField path="content" type="str" required>
+  The text that enters the model's context.
+</ParamField>
+<ParamField path="custom_type" type="str" required>
+  Selects which renderer to use. First registration per `custom_type` wins.
+</ParamField>
+<ParamField path="details" type="dict | None">
+  Arbitrary structured data passed to the renderer. Not sent to the model.
+</ParamField>
+<ParamField path="deliver_as" type='"follow_up" | "steer"'>
+  How to queue the message if the agent is mid-run. Defaults to `"follow_up"`.
+</ParamField>
+<ParamField path="trigger_turn" type="bool">
+  When `True` (default), starts a turn when the session is idle. Set to `False` to queue in-memory for the next run without triggering one.
+</ParamField>
+
+Custom rendering works in the interactive TUI and the `-p` print transcript, and survives `/resume`. If no renderer is registered or a renderer raises, the message falls back to its raw `content`.
+
+## Component Widgets
+
+Component widgets let an extension mount its own Textual widgets into the TUI. This API deliberately makes Textual part of the public extension contract — prefer strings/data (message renderers, tool renderers) when they are enough, as those work in every frontend including print mode.
+
+Always gate on `supports_components` first — it is `False` in print mode:
+
+```python
+def setup(tau):
+    components = tau.context.ui.components
+    if not components.supports_components:
+        return  # print mode / older host: stay widget-less but functional
+
+    # A persistent widget above or below the prompt
+    def build_strip(theme):
+        return MyStripWidget(theme)          # a textual.widget.Widget
+
+    components.set_slot_widget("my-widget", build_strip, placement="below_prompt")
+
+    # For plain text, skip the factory entirely — pass a list of Rich-markup lines:
+    components.set_slot_widget("status", ["[b]ready[/b]", "2 tasks queued"])
+
+    # Pre-dispatch key interceptor (fires before host priority bindings)
+    def on_key(event, prompt_text):
+        if prompt_text == "" and event.key == "down":
+            return True     # consume the key
+        return False        # let it through
+
+    unsubscribe = components.register_key_interceptor(on_key)
+```
+
+`ComponentBridge` methods:
+
+| Method | Description |
+|---|---|
+| `set_slot_widget(key, content, *, placement)` | Mount a factory or `Sequence[str]` into a prompt-adjacent slot (`"above_prompt"` or `"below_prompt"`). Pass `content=None` to remove. |
+| `open_main_view(factory)` | Mount `factory(handle, theme)` as a full main-area view (display-toggled sibling, not a modal). Returns a `MainViewHandle`; call `handle.close()` to restore the transcript. |
+| `register_key_interceptor(handler)` | Register `handler(event, prompt_text) -> bool`. Return `True` to consume. Returns an unsubscribe callable. Hard interrupt keys (`ctrl+c`, `ctrl+d`) are always reserved. |
+| `get_prompt_text()` | Read the current prompt-editor text. |
+| `request_render()` | Ask the host to re-render mounted extension widgets. |
+
+All mounted widgets are force-cleared on `/reload`, `/resume`, and `/new`. Clear your own on `session_shutdown`.
+
+## Testing Extensions
+
+Load extensions through the real runtime rather than importing modules directly:
+
+```python
+from tau_coding import TauResourcePaths
+from tau_coding.extensions import ExtensionRuntime
+
+
+def test_loads(tmp_path):
+    paths = TauResourcePaths(
+        root=tmp_path / "tau", cwd=tmp_path / "project",
+        agents_root=tmp_path / "agents",
+    )
+    runtime = ExtensionRuntime()
+    runtime.load(paths, extra_paths=(EXTENSION_DIR,), include_resource_dirs=False)
+    assert runtime.extension_names == ("my_ext",)
+```
+
+`include_resource_dirs=False` keeps the test hermetic — nothing from `~/.tau/extensions` leaks in. To monkeypatch module globals in tests, patch the loaded synthetic module found in `sys.modules` by its `tau_extension_` prefix, not your package's import identity.
+
+## Extension Size Patterns
+
+<CardGroup cols={3}>
+  <Card title="Single File" icon="file">
+    `~/.tau/extensions/greet.py` — the quick start above. No config needed.
+  </Card>
+  <Card title="Package Folder" icon="folder">
+    A directory with `extension.py` — split helpers into sibling modules and import them with `from . import helper`.
+  </Card>
+  <Card title="Repo with src/ Layout" icon="code">
+    Declare the entry in `pyproject.toml` under `[tool.tau]`. Tau reads only the `[tool.tau]` table; installability is your business.
+  </Card>
+</CardGroup>
+
+**Use relative imports** between your own modules. The loader imports your extension under a synthetic package name and never touches `sys.path`, so `import helper` won't resolve — `from . import helper` will. **Feature-detect optional Tau APIs** with `getattr`/`try: import` if you want the extension to load on older Tau versions.
+
+## Example Extensions
+
+The `examples/extensions/` directory in the repo contains:
+
+<CardGroup cols={2}>
+  <Card title="hello_tool.py" icon="hand-wave">
+    Minimal custom tool registration — the simplest possible extension.
+  </Card>
+  <Card title="permission_gate.py" icon="shield">
+    Blocks dangerous bash commands using the `tool_call` lifecycle hook.
+  </Card>
+</CardGroup>
+
+A larger real-world extension, [rian-dolphin/tau-subagents](https://github.com/rian-dolphin/tau-subagents), ports pi-subagents and serves as the reference for the `[tool.tau]` manifest shape:
+
+```bash
+git clone git@github.com:rian-dolphin/tau-subagents.git
+tau -e ./tau-subagents
+# then: "Use a subagent to summarize this repository's architecture."
+```

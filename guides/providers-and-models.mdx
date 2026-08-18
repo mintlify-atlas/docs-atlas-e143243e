@@ -1,0 +1,233 @@
+---
+title: "Connecting Providers and Switching Models in Tau AI"
+sidebarTitle: "Providers"
+description: "Connect OAuth subscriptions, API keys, or local models to Tau. Covers built-in providers, custom endpoints, catalog overlays, and model switching."
+---
+
+Tau separates the concept of a **provider** — the service that hosts AI models — from the **model** itself. Built-in providers cover major cloud APIs and OAuth subscriptions, while any OpenAI-compatible endpoint (including local servers) can be registered as a custom provider. You can switch models mid-session and Tau handles the protocol translation automatically.
+
+## The fastest setup: `/login`
+
+Run `tau` and type `/login` to open the provider picker. A search field lets you filter the list, which is especially useful for long API-key provider lists. You can also address a specific provider directly:
+
+```text
+/login              # open the interactive picker
+/login openai       # save an OpenAI API key
+/login openai-codex # authenticate a Codex/ChatGPT subscription via OAuth
+/login anthropic-subscription # authenticate Claude Pro/Max via OAuth
+/login anthropic-api          # save an Anthropic API key
+/login github-copilot         # authenticate GitHub Copilot with a device code
+/login opencode-go  # save an OpenCode Go API key
+/login nvidia       # save an NVIDIA NIM API key
+/login huggingface  # save a Hugging Face token
+/login custom       # register an OpenAI-compatible custom provider
+```
+
+To check what is currently configured and how each provider will authenticate:
+
+```bash
+tau providers
+```
+
+## Built-in providers
+
+Tau ships with providers for **OpenAI**, **Anthropic**, **OpenAI Codex** (subscription), **GitHub Copilot**, **Google Gemini**, **DeepSeek**, **xAI**, **Groq**, **Cerebras**, **OpenCode Go**, **OpenCode Zen**, **Moonshot AI (Kimi)**, **Kimi Code** (subscription), **OpenRouter**, **Hugging Face**, and **NVIDIA NIM**.
+
+### OAuth providers
+
+Some providers authenticate through a browser flow rather than an API key:
+
+| Tau provider | Login flow | Prerequisite |
+|---|---|---|
+| `openai-codex` | Browser callback with pasted-code fallback | A supported ChatGPT/Codex subscription |
+| `anthropic` | Browser callback with PKCE and pasted-code fallback | Claude Pro/Max with Anthropic extra usage available |
+| `github-copilot` | GitHub device code | An active Copilot plan; organization policy must allow the selected model |
+
+GitHub Copilot asks for a GitHub Enterprise Server URL. Leave it blank for `github.com`. Device login also works in SSH/headless sessions — open the verification URL on any device and enter the displayed code.
+
+Anthropic uses distinct aliases so the authentication method is unambiguous: `/login anthropic-subscription` starts OAuth while `/login anthropic-api` saves an API key. OAuth tokens refresh automatically before each request and are saved atomically. `/logout` removes the local credential but does not revoke the grant remotely — use the provider's account settings for remote revocation.
+
+<Note>
+Browser login can fall back to a pasted redirect URL when the callback port is unavailable. In that flow, paste or click the authorization URL rather than reassembling it by hand — a URL broken across line wraps will be rejected by the provider. Copilot uses a device code instead: open the short verification URL and enter the code shown beneath it.
+</Note>
+
+### OpenCode Go and Zen
+
+OpenCode Go and OpenCode Zen are API-key providers, not OAuth providers. Sign in at the OpenCode console, subscribe to Go or fund Zen, copy the API key, and then run:
+
+```text
+/login opencode-go  # subscription limits; https://opencode.ai/zen/go/v1
+/login opencode     # Zen pay-as-you-go; https://opencode.ai/zen/v1
+```
+
+Both also read `OPENCODE_API_KEY`. Tau stores their credentials separately under `opencode-go` and `opencode`, allowing different keys when needed.
+
+## Prompt caching
+
+### OpenAI
+
+For direct OpenAI API and Codex OAuth sessions, Tau sends a stable session-derived prompt-cache key with every request, including continuations after tool calls. Resuming a session reuses its key; branching creates a new one. The TUI sidebar's latest-request cache rate shows whether the most recent request actually hit.
+
+### Anthropic
+
+Tau marks cache breakpoints on Anthropic requests so the system prompt, tool schemas, and conversation history are reused between turns. Which retention duration Tau requests depends on authentication:
+
+- **Claude Pro/Max via OAuth** requests the one-hour cache, since subscription auth is not billed per token and the default five-minute window is often shorter than a build or test run.
+- **An Anthropic API key** uses the five-minute default, because one-hour cache writes cost more per token and that should be a deliberate choice.
+
+### Codex subscription context limits
+
+A model with the same ID can have a smaller, rollout-specific context window through Codex OAuth than through a direct API key. Tau queries the authenticated Codex model catalog at session start and uses the returned limits. If discovery is unavailable, Tau falls back to conservative Codex-specific values from its built-in catalog. Run `/session` to see whether the active limit came from the live provider catalog or Tau's fallback.
+
+## Hugging Face inference provider pinning
+
+Log in with `/login huggingface` or set `HF_TOKEN`. Tau's built-in Hugging Face catalog includes 47 coding-capable models routed through `https://router.huggingface.co/v1`, covering DeepSeek, Gemma, GLM, GPT OSS, Kimi, Llama, MiniMax, MiMo, Qwen, and Step families.
+
+For a new session, Hugging Face routes the model automatically. After the first successful response, Tau reads Hugging Face's `x-inference-provider` response header and pins that backing provider for the rest of the session. To choose the initial provider instead, add a per-model `inference_providers` preference to `~/.tau/providers.json`:
+
+```json
+{
+  "schema_version": 2,
+  "default_provider": "huggingface",
+  "provider_preferences": {
+    "huggingface": {
+      "default_model": "zai-org/GLM-5.2",
+      "inference_providers": { "zai-org/GLM-5.2": "deepinfra" }
+    }
+  },
+  "scoped_models": []
+}
+```
+
+Use the exact provider suffix advertised for that model by Hugging Face. Tau sends `zai-org/GLM-5.2:deepinfra` on the wire but continues to display and store the logical `zai-org/GLM-5.2` model. The pin survives session resume. Run `/session` to see the active pin.
+
+<Tip>
+To bill Hugging Face requests to an organization, add the billing header to the matching provider preference in `~/.tau/providers.json`:
+
+```json
+{
+  "default_provider": "huggingface",
+  "provider_preferences": {
+    "huggingface": {
+      "default_model": "openai/gpt-oss-120b",
+      "headers": { "X-HF-Bill-To": "my-org" },
+      "thinking_defaults": { "openai/gpt-oss-120b": "low" },
+      "timeout_seconds": 60,
+      "max_retries": 2,
+      "max_retry_delay_seconds": 1
+    }
+  },
+  "scoped_models": []
+}
+```
+</Tip>
+
+## Adding a custom or local provider
+
+Any OpenAI-compatible endpoint works, including local servers like llama.cpp or Ollama. The interactive path is:
+
+```text
+/login custom
+```
+
+Tau prompts for the provider name, display name, base URL, API-key environment variable, default model, and API key. It writes the provider definition to `~/.tau/catalog.toml` and runtime preferences to `~/.tau/providers.json`, then makes the provider available immediately.
+
+### llama.cpp quickstart
+
+<Steps>
+  <Step title="Start a local llama.cpp server">
+    ```bash
+    llama-server -hf ggml-org/Qwen3.6-35B-A3B-GGUF:Q8_0
+    ```
+    Some installs expose the same server as `llama serve`:
+    ```bash
+    llama serve -hf ggml-org/Qwen3.6-35B-A3B-GGUF:Q8_0
+    ```
+    The server listens on port `8080` by default.
+  </Step>
+  <Step title="Register the provider with Tau">
+    ```bash
+    export LLAMA_API_KEY=local # any non-empty value unless you started with --api-key
+
+    tau --provider llama-cpp \
+      --base-url http://localhost:8080/v1 \
+      --api-key-env LLAMA_API_KEY \
+      --model local \
+      setup
+    ```
+  </Step>
+  <Step title="Run Tau against the local model">
+    ```bash
+    tau --provider llama-cpp
+    tau --provider llama-cpp "summarize this project"    # TUI with an initial prompt
+    tau --provider llama-cpp -p "summarize this project" # one-shot print mode
+    ```
+  </Step>
+</Steps>
+
+For Ollama (whose OpenAI-compatible endpoint usually runs at `http://localhost:11434/v1`), use the same `tau setup` flow:
+
+```bash
+tau --provider local \
+  --base-url http://localhost:11434/v1 \
+  --api-key-env LOCAL_API_KEY \
+  --model qwen \
+  setup
+```
+
+### Catalog TOML overlay
+
+For reusable provider definitions, add a user-level catalog overlay at `~/.tau/catalog.toml`:
+
+```toml
+schema_version = 1
+
+[[providers]]
+name = "local-gateway"
+display_name = "Local Gateway"
+kind = "openai-compatible"
+base_url = "http://localhost:11434/v1"
+api_key_env = "LOCAL_GATEWAY_API_KEY"
+credential_name = "local-gateway"
+models = ["qwen-coder"]
+default_model = "qwen-coder"
+docs_url = "https://example.test/local-gateway"
+
+[providers.context_windows]
+qwen-coder = 64000
+```
+
+Tau loads its bundled `src/tau_coding/data/catalog.toml` first, then overlays `~/.tau/catalog.toml`. A user entry with the same `name` can extend or override a built-in provider: scalar fields replace built-in values, `models` are merged with user models first, and `context_windows` are merged.
+
+<Warning>
+There is intentionally **no project-level** `.tau/catalog.toml`. Only the user-level `~/.tau/catalog.toml` is loaded, so cloning a repository cannot silently redirect a provider's `base_url` or credentials to an unexpected service.
+</Warning>
+
+Catalog TOML is for provider and model metadata only. It does not accept runtime request options such as custom HTTP headers or timeouts — put those in `~/.tau/providers.json` instead.
+
+## Choosing and switching models
+
+<CardGroup cols={3}>
+  <Card title="/model picker" icon="list">
+    Opens the model picker across all configured providers. Selecting a model from another provider switches the active provider too.
+  </Card>
+  <Card title="Ctrl+P" icon="keyboard">
+    Cycles your *scoped* (favorite) models without opening the picker. Build the list with `/scoped-models` or press `Space` on a model in the `/model` picker.
+  </Card>
+  <Card title="Launch flags" icon="terminal">
+    `tau -m <model>` or `tau --provider <name> -m <model>` chooses a model at launch.
+  </Card>
+</CardGroup>
+
+When a model switch crosses provider APIs, Tau compiles existing tool history for the target provider, translating provider-specific tool-call IDs to a portable format. This lets a session continue after tools have run without exposing provider validation errors.
+
+## How credentials are resolved
+
+For a given provider, Tau uses in order: a stored credential in `~/.tau/credentials.json`, then the environment variable named by the provider's `api_key_env`. Credentials in `~/.tau/credentials.json` are stored with `0600` permissions and atomic file replacement; the file is not encrypted, so protect your Tau home directory.
+
+```text
+/login [provider]   # add or refresh a saved credential
+/logout [provider]  # remove a saved credential
+```
+
+Saved credentials take precedence over environment variables. `/logout` only edits saved credentials — it never touches your environment or `providers.json`.

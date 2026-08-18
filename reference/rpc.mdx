@@ -1,0 +1,368 @@
+---
+title: "JSONL RPC Protocol for Subprocess Integration"
+sidebarTitle: "RPC Protocol"
+description: "Reference for Tau's Pi-compatible JSONL RPC mode: starting the server, request and response formats, session lifecycle, and embedding Tau as a subprocess."
+---
+
+RPC mode lets you control Tau as a headless subprocess by writing JSON commands to its stdin and reading structured events from its stdout. This is how editor plugins, CI orchestrators, and custom frontends embed Tau without spawning a TUI or parsing terminal output.
+
+<Warning>
+`--mode rpc` does not accept a positional prompt argument. Pass your initial prompt as a `prompt` command on stdin after the process starts.
+</Warning>
+
+## Starting RPC mode
+
+```bash
+tau --mode rpc [--provider NAME] [--model MODEL] [--cwd PATH] [--session ID]
+```
+
+All standard provider, model, and working-directory flags work in RPC mode. Use `--session` to resume an existing session by its ID. Diagnostics (startup notices, errors, warnings) are written to **stderr**, keeping stdout clean for the JSONL protocol.
+
+---
+
+## Framing
+
+RPC mode uses newline-delimited JSON (NDJSON):
+
+- One JSON object per **LF-terminated line** on stdin (input) and stdout (output).
+- A trailing `\r` (CRLF) is accepted for Windows compatibility.
+- Unicode line separators (U+2028, U+2029) are ordinary characters inside JSON strings — they do not terminate a record.
+- Records are limited to **16 MiB**. Oversized lines return a parse error without stopping the server.
+
+The server exits cleanly when stdin reaches EOF.
+
+---
+
+## Request format
+
+Send one JSON object per line to stdin:
+
+```json
+{"id":"1","type":"prompt","message":"Inspect this project"}
+```
+
+<ParamField path="id" type="string | number">
+  Optional request identifier. When present, the corresponding response echoes this value in its `id` field. Useful for correlating responses when sending multiple commands in quick succession.
+</ParamField>
+
+<ParamField path="type" type="string" required>
+  Command name. See the [Command reference](#command-reference) section below.
+</ParamField>
+
+Additional fields depend on the command type.
+
+---
+
+## Response format
+
+Responses and session events are compact JSON lines written to stdout. There are two categories:
+
+### Response lines
+
+Emitted immediately in reply to each command:
+
+```json
+{"id":"1","type":"response","command":"prompt","success":true}
+```
+
+```json
+{"type":"response","command":"prompt","success":false,"error":"Agent is already streaming"}
+```
+
+| Field | Description |
+| --- | --- |
+| `type` | Always `"response"` |
+| `command` | The command `type` that triggered this response |
+| `success` | `true` or `false` |
+| `id` | Echo of the request `id`, if provided |
+| `error` | Error message string, present when `success` is `false` |
+| `data` | Command-specific result object, present on success for data-returning commands |
+
+Unknown commands and invalid arguments return `success: false` without stopping the process.
+
+### Event lines
+
+Asynchronous session events written during an agent run. Events do not carry request IDs:
+
+```json
+{"type":"agent_start"}
+{"type":"text_delta","text":"Looking at your project..."}
+{"type":"tool_call","name":"read","input":{"path":"README.md"}}
+{"type":"tool_result","name":"read","content":"..."}
+{"type":"agent_end"}
+{"type":"agent_settled"}
+```
+
+<Note>
+Use `agent_settled`, not `agent_end`, to determine that a run is fully idle. Retries, overflow compaction, or queued follow-up prompts can follow `agent_end` before the agent fully settles.
+</Note>
+
+---
+
+## Session lifecycle
+
+<Steps>
+  <Step title="Start the process">
+    Launch `tau --mode rpc`. Tau writes a `session_start` event once the session is initialized and ready for commands.
+  </Step>
+  <Step title="Send a prompt">
+    Write a `prompt` command to stdin. Tau immediately responds with `success: true`, then streams session events asynchronously.
+  </Step>
+  <Step title="Wait for agent_settled">
+    Read events until you receive `agent_settled`. At that point the agent is fully idle and you can send the next command.
+  </Step>
+  <Step title="Continue or close">
+    Send additional prompts for a multi-turn conversation, or close stdin to shut down the session cleanly.
+  </Step>
+</Steps>
+
+### Resuming a session
+
+Pass `--session <id>` when starting to resume an existing session:
+
+```bash
+tau --mode rpc --session sess_abc123
+```
+
+The session's full conversation history is loaded. New prompts continue the existing thread.
+
+---
+
+## Command reference
+
+<Accordion title="prompt / steer / follow_up — Send a message">
+
+All three send a user message to the agent. They differ in streaming behavior:
+
+```json
+{"id":"1","type":"prompt","message":"Refactor this function"}
+```
+
+```json
+{"id":"2","type":"steer","message":"Actually, focus on performance"}
+```
+
+```json
+{"id":"3","type":"follow_up","message":"Now write the tests"}
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `message` | yes | The user message text |
+| `streamingBehavior` | no | Override: `"steer"` or `"followUp"` |
+
+If the agent is currently streaming, you must set `streamingBehavior` to `"steer"` or `"followUp"`. A bare `prompt` while streaming returns an error.
+
+</Accordion>
+
+<Accordion title="abort — Cancel the current run">
+
+```json
+{"type":"abort"}
+```
+
+Cancels any in-flight agent run. Returns `success: true` immediately.
+
+</Accordion>
+
+<Accordion title="get_state — Query session state">
+
+```json
+{"id":"4","type":"get_state"}
+```
+
+Returns a `data` object:
+
+```json
+{
+  "model": "claude-sonnet-4-6",
+  "provider": "anthropic",
+  "thinkingLevel": "medium",
+  "isStreaming": false,
+  "sessionId": "sess_abc123",
+  "autoCompactionEnabled": true,
+  "messageCount": 12
+}
+```
+
+</Accordion>
+
+<Accordion title="get_messages — Retrieve conversation history">
+
+```json
+{"id":"5","type":"get_messages"}
+```
+
+Returns `{"messages": [...]}` — the full message list for the current session.
+
+</Accordion>
+
+<Accordion title="get_available_models — List models">
+
+```json
+{"id":"6","type":"get_available_models"}
+```
+
+Returns `{"models": [...]}` — model choice objects for the current provider.
+
+</Accordion>
+
+<Accordion title="set_model — Switch model">
+
+```json
+{"id":"7","type":"set_model","modelId":"gpt-5.4","provider":"openai"}
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `modelId` | yes | Model ID from the provider's catalog |
+| `provider` | no | Provider name; defaults to the current provider |
+
+Returns `{"provider": "openai", "id": "gpt-5.4"}` on success.
+
+</Accordion>
+
+<Accordion title="get_available_thinking_levels — List thinking levels">
+
+```json
+{"type":"get_available_thinking_levels"}
+```
+
+Returns `{"levels": ["off","minimal","low","medium","high","xhigh"]}` for the active model.
+
+</Accordion>
+
+<Accordion title="set_thinking_level — Change thinking intensity">
+
+```json
+{"type":"set_thinking_level","level":"high"}
+```
+
+Returns `{"level": "high"}` on success.
+
+</Accordion>
+
+<Accordion title="compact — Trigger context compaction">
+
+```json
+{"type":"compact","customInstructions":"Focus on the auth module"}
+```
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `customInstructions` | no | Optional guidance for the compaction summary |
+
+Returns `{"summary": "..."}` — the compaction summary text.
+
+</Accordion>
+
+<Accordion title="new_session — Start a fresh session">
+
+```json
+{"type":"new_session"}
+```
+
+Creates a new empty session in the same working directory. Returns `{"message": "..."}`.
+
+</Accordion>
+
+<Accordion title="switch_session — Resume a different session">
+
+```json
+{"type":"switch_session","sessionId":"sess_xyz789"}
+```
+
+Loads the specified session. Returns `{"message": "..."}`.
+
+</Accordion>
+
+<Accordion title="get_session_stats — Token and cost statistics">
+
+```json
+{"type":"get_session_stats"}
+```
+
+Returns the session statistics object including token usage and cost estimates.
+
+</Accordion>
+
+<Accordion title="get_tree — Session branch tree">
+
+```json
+{"type":"get_tree"}
+```
+
+Returns `{"entries": [...], "leafId": "..."}` — the full session tree and the ID of the active leaf entry.
+
+</Accordion>
+
+<Accordion title="fork — Branch from a tree entry">
+
+```json
+{"type":"fork","entryId":"entry_abc"}
+```
+
+Branches the session to the specified tree entry. Returns the fork result object.
+
+</Accordion>
+
+<Accordion title="get_commands — List slash commands">
+
+```json
+{"type":"get_commands"}
+```
+
+Returns `{"commands": [{"name": "/reload", "description": "..."}, ...]}` — the list of registered slash commands.
+
+</Accordion>
+
+---
+
+## Minimal Node.js / Electron client
+
+The following example shows the minimal pattern for spawning Tau in RPC mode, parsing the JSONL output, and sending a prompt:
+
+```js
+import { spawn } from "node:child_process";
+
+const tau = spawn("tau", ["--mode", "rpc"], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+
+tau.stdout.setEncoding("utf8");
+let buffer = "";
+
+tau.stdout.on("data", (chunk) => {
+  buffer += chunk;
+  for (;;) {
+    const index = buffer.indexOf("\n");
+    if (index < 0) break;
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    const event = JSON.parse(line);
+    console.log(event);
+  }
+});
+
+tau.stdin.write(
+  JSON.stringify({ id: "1", type: "prompt", message: "Hello" }) + "\n"
+);
+```
+
+---
+
+## RPC mode vs. print mode
+
+| Feature | `--mode rpc` | `--mode text` / `--mode json` |
+| --- | --- | --- |
+| Session persistence | Persistent across multiple prompts | One prompt per invocation |
+| Input source | Stdin (JSONL commands) | Positional CLI argument or piped stdin |
+| Output | JSONL events on stdout | Rendered text or JSON on stdout |
+| Session resuming | `--session` flag | `--session` flag |
+| Suitable for | Subprocess integration, editor plugins | Scripting, CI, one-shot automation |
+
+---
+
+## Implementation notes
+
+The RPC server is implemented in `src/tau_coding/rpc.py`. It mirrors the public `CodingSession` interface from `tau_agent`. This first version does not yet implement Pi's direct `bash`/`abort_bash`, extension UI request/response protocol, session naming, auto-compaction toggling, entry cursors, cloning, or export commands. The protocol is forward-compatible: unknown command types return `success: false` with an error message and do not crash the server.

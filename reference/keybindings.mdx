@@ -1,0 +1,119 @@
+---
+title: "Keyboard Shortcuts for the Tau TUI"
+sidebarTitle: "Keybindings"
+description: "Default keyboard shortcuts for the Tau interactive TUI, how to remap them in tui.json, and which keys are hard-reserved by the terminal."
+---
+
+The Tau TUI is keyboard-driven. Every action has a default binding you can view in-session with `/hotkeys` or remap in `~/.tau/tui.json`. The table below shows the full set of defaults grouped by function area.
+
+## Default Keybindings
+
+### Prompting
+
+| Key | Action |
+|---|---|
+| <kbd>Enter</kbd> | Submit the prompt (or apply a highlighted completion) |
+| <kbd>Shift+Enter</kbd> | Insert a newline without submitting |
+| <kbd>Esc</kbd> | Cancel the active run |
+| <kbd>Enter</kbd> (while running) | Queue text as steering input for the current run |
+| <kbd>Alt+Enter</kbd> | Queue a follow-up that waits until the run would naturally stop |
+| <kbd>Up</kbd> (empty prompt, while running) | Edit the most recently queued follow-up |
+
+### Navigation & Pickers
+
+| Key | Action |
+|---|---|
+| <kbd>Ctrl+K</kbd> | Open the command palette |
+| <kbd>Ctrl+R</kbd> | Open the session picker |
+| <kbd>Tab</kbd> | Accept the highlighted completion suggestion |
+| <kbd>Down</kbd> / <kbd>Up</kbd> | Move through completion suggestions |
+| <kbd>Ctrl+E</kbd> (in `/prompts`) | Edit the selected prompt template file |
+| <kbd>Ctrl+S</kbd> (while editing a template) | Save the template and reload resources |
+
+### Models & Thinking
+
+| Key | Action |
+|---|---|
+| <kbd>Ctrl+P</kbd> | Cycle through your scoped (favorite) models |
+| <kbd>Shift+Tab</kbd> | Cycle the thinking mode (off → low → medium → high) |
+| <kbd>Ctrl+T</kbd> | Toggle display of thinking / reasoning tokens in the transcript |
+
+### Output & Session
+
+| Key | Action |
+|---|---|
+| <kbd>Ctrl+O</kbd> | Toggle between compact tool previews and exact commands with full output |
+| <kbd>Ctrl+C</kbd> | Clear the prompt input |
+| <kbd>Ctrl+D</kbd> | Quit Tau |
+
+## Customizing Keybindings
+
+You can remap most actions by adding a `keybindings` section to `~/.tau/tui.json`. Each entry maps an action name to a Textual key string. Any action you omit keeps its default binding.
+
+```json
+{
+  "keybindings": {
+    "command_palette": "ctrl+k",
+    "session_picker": "ctrl+r",
+    "queue_follow_up": "alt+enter",
+    "accept_completion": "tab",
+    "completion_next": "down",
+    "completion_previous": "up",
+    "thinking_cycle": "shift+tab",
+    "model_cycle": "ctrl+p",
+    "toggle_thinking": "ctrl+t",
+    "toggle_tool_results": "ctrl+o",
+    "copy_message": "ctrl+c",
+    "quit": "ctrl+d"
+  }
+}
+```
+
+### Supported Action Names
+
+| Action | Default | Description |
+|---|---|---|
+| `cancel` | <kbd>Esc</kbd> | Cancel the active run |
+| `command_palette` | <kbd>Ctrl+K</kbd> | Open the searchable command palette |
+| `session_picker` | <kbd>Ctrl+R</kbd> | Open the session picker |
+| `queue_follow_up` | <kbd>Alt+Enter</kbd> | Queue a follow-up prompt |
+| `accept_completion` | <kbd>Tab</kbd> | Accept the highlighted completion |
+| `completion_next` | <kbd>Down</kbd> | Move to the next completion |
+| `completion_previous` | <kbd>Up</kbd> | Move to the previous completion |
+| `thinking_cycle` | <kbd>Shift+Tab</kbd> | Cycle thinking mode level |
+| `model_cycle` | <kbd>Ctrl+P</kbd> | Cycle scoped models |
+| `toggle_thinking` | <kbd>Ctrl+T</kbd> | Toggle thinking token display |
+| `toggle_tool_results` | <kbd>Ctrl+O</kbd> | Toggle full tool output |
+| `copy_message` | <kbd>Ctrl+C</kbd> | Clear prompt input |
+| `quit` | <kbd>Ctrl+D</kbd> | Quit Tau |
+
+### Textual Key Syntax
+
+Key strings follow [Textual's key name format](https://textual.textualize.io/guide/input/#key). Some examples:
+
+```text
+ctrl+k         # Ctrl + K
+shift+tab      # Shift + Tab
+alt+enter      # Alt + Enter
+f2             # F2
+down           # Down arrow
+```
+
+<Note>
+  Tau validates key names at startup. Unknown names, empty strings, and duplicate assignments all cause an error that fails fast — mistakes are caught before you start a session, not mid-session.
+</Note>
+
+## Hard-Reserved Keys
+
+<Warning>
+  **Ctrl+C** and **Ctrl+D** are intercepted by the terminal before Tau can see them when used outside the TUI prompt input. Extensions cannot remap or intercept these keys. Within the prompt input, Tau's own bindings apply, but do not rely on these keys being available to extensions at the OS level.
+</Warning>
+
+These two keys are hard-reserved and behave according to terminal conventions outside of Tau's input widget:
+
+| Key | Terminal behavior |
+|---|---|
+| <kbd>Ctrl+C</kbd> | Sends `SIGINT` to the foreground process |
+| <kbd>Ctrl+D</kbd> | Sends EOF / closes stdin |
+
+Inside the TUI prompt, Tau maps `Ctrl+C` to clear the input and `Ctrl+D` to quit, but this happens at the application layer — the keys can still be intercepted by the OS or terminal emulator before Tau handles them.

@@ -1,0 +1,126 @@
+---
+title: "Three-Layer Architecture: tau_ai, tau_agent, tau_coding"
+sidebarTitle: "Architecture"
+description: "A deep dive into Tau's three-package design, the dependency direction that keeps each layer portable, and why that boundary is the whole point."
+---
+
+Tau is deliberately small and layered. The most important design decision is a hard boundary between the reusable agent brain and everything that wraps around it — the terminal UI, CLI, file tools, and config paths. Each package answers exactly one question, so you can read and test any layer without untangling the others.
+
+## The three packages at a glance
+
+```text
+tau_coding  →  tau_agent  →  tau_ai
+```
+
+Dependencies only point in one direction: `tau_coding` imports from `tau_agent`, which imports from `tau_ai`. The arrows never reverse. UI code consumes events; the core never reaches up to render anything.
+
+<CardGroup cols={3}>
+  <Card title="tau_ai" icon="satellite-dish">
+    Translates each model provider's API into Tau's provider-neutral event stream. Nothing above it needs to care which vendor is in use.
+  </Card>
+  <Card title="tau_agent" icon="brain">
+    The portable agent brain: messages, tools, events, the loop, the harness, and session primitives. No CLI, no Rich, no Textual.
+  </Card>
+  <Card title="tau_coding" icon="terminal">
+    The full coding application: CLI, TUI, built-in tools, project instructions, skills, prompts, provider config, and durable sessions.
+  </Card>
+</CardGroup>
+
+## What each layer owns
+
+### `tau_ai` — talking to models
+
+`tau_ai` owns provider-specific model streaming. It ingests a list of messages and a list of tools, opens a streaming connection to the configured provider (OpenAI, Anthropic, Hugging Face, OpenRouter, and others), and translates the raw HTTP chunks into Tau's **provider-neutral `AssistantMessageEvent` stream**. Nothing above this layer ever touches a raw provider chunk.
+
+**Key responsibilities:**
+- Per-provider API clients and authentication
+- Streaming response parsing (`AssistantStartEvent`, delta events, `AssistantDoneEvent`, `AssistantErrorEvent`)
+- Tool-call serialisation into provider-specific wire formats
+- Token usage and cost accounting
+
+### `tau_agent` — the portable brain
+
+`tau_agent` is the reusable engine that could drive any application — a terminal, a web server, a test harness. It wraps `tau_ai` and adds state, tooling, and event routing.
+
+**Key responsibilities:**
+- `AgentHarness` — stateful run manager, transcript accumulator, event broadcaster
+- `run_agent_loop` — pure turn-by-turn loop: stream assistant → collect tool calls → execute tools → repeat
+- `AgentEvent` stream — ten typed events every frontend renders from
+- `AgentTool` / `AgentToolResult` — typed tool definition and result model
+- Session primitives — `SessionState`, `SessionEntry` variants, JSONL storage
+- Message types — `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ThinkingContent`, …
+
+`tau_agent` must **not** import Typer, Rich, Textual, application resource locations, slash commands, or provider-specific code beyond the `ModelProvider` protocol. That constraint is what keeps it portable.
+
+### `tau_coding` — the coding application
+
+`tau_coding` wraps the brain and makes it a real coding agent you can run. It imports from `tau_agent` freely, but `tau_agent` never imports back.
+
+**Key responsibilities:**
+- CLI entry point (`tau` command, `--print`/`-p` flag, `--cwd`)
+- Textual TUI (the interactive session you see by default)
+- Built-in coding tools: `read`, `write`, `edit`, `bash`
+- `CodingSession` — the coding-agent environment (provider selection, model config, project instructions, skills, prompt templates, compaction)
+- On-disk JSONL sessions under `~/.tau/sessions/`
+- Extension and plugin API
+- Slash commands (`/login`, `/model`, `/compact`, `/export`, …)
+- Resource loading — `AGENTS.md`, `.tau/`, `.agents/` project context
+
+## The core boundary
+
+```text
+AgentHarness   = reusable agent brain
+CodingSession  = coding-agent environment
+TUI            = one possible frontend
+```
+
+`AgentHarness` lives in `tau_agent`. It holds the transcript, routes tool calls, emits events, and manages the cancellation token. It knows nothing about file paths, terminal widgets, or slash commands.
+
+`CodingSession` lives in `tau_coding`. It wraps the harness with the stuff a coding application needs: which provider and model to use, where sessions are saved, what tools are loaded, how project instructions are discovered. `CodingSession` is what the built-in TUI talks to.
+
+The TUI itself is one more layer on top — it renders events, handles key bindings, and calls `session.prompt(text)` when the user presses Enter.
+
+## Why the boundary matters
+
+Because `tau_agent` is UI-free, the same core can drive three completely different frontends without any code changes to the brain:
+
+<Tabs>
+  <Tab title="Interactive TUI">
+    The Textual TUI subscribes to events and renders them as Rich widgets in real time. Cancellation, history navigation, model switching, and compaction all flow through `CodingSession`.
+  </Tab>
+  <Tab title="Print mode">
+    `tau -p "summarise this repo"` uses the same `CodingSession` but renders events as plain terminal text — no widgets, no event loop, streaming straight to stdout.
+  </Tab>
+  <Tab title="Custom frontend">
+    Any Python program can instantiate `AgentHarness` directly, iterate `async for event in harness.prompt(text)`, and render however it likes. See [Build a Custom Frontend](/internals/custom-frontend).
+  </Tab>
+</Tabs>
+
+That's also what makes Tau readable as a teaching project: each layer answers one question, and you can study or test it in isolation.
+
+## Dependency diagram
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                      tau_coding                         │
+│  CLI · TUI · CodingSession · Tools · Skills · Sessions  │
+└──────────────────────────┬──────────────────────────────┘
+                           │  imports
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                      tau_agent                          │
+│  AgentHarness · run_agent_loop · AgentEvent · AgentTool │
+└──────────────────────────┬──────────────────────────────┘
+                           │  imports
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                       tau_ai                            │
+│  Provider clients · Streaming · Provider-neutral events │
+└─────────────────────────────────────────────────────────┘
+
+Arrows point in one direction only. tau_agent never imports tau_coding.
+```
+
+<Note>
+  The phase-by-phase build journals, design docs, and Architecture Decision Records live in the repo under `dev-notes/` (not published here). They trace each layer as it was built. See [Contributing](https://github.com/huggingface/tau/blob/main/CONTRIBUTING.md).
+</Note>

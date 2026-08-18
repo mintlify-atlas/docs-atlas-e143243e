@@ -1,0 +1,300 @@
+---
+title: "Core Concepts: Architecture, Events, and Sessions"
+sidebarTitle: "Concepts"
+description: "Understand Tau's three-layer architecture, typed event stream, AgentHarness library API, durable sessions, tools, and the extensions system."
+---
+
+Tau is built from a small number of well-separated ideas. This page explains each one — what it is, why it exists, and how it connects to the rest of the system. Once these concepts click, both the source code and the rest of the documentation become much easier to read.
+
+## The three-layer architecture
+
+Tau is split into three packages that depend on each other in exactly one direction:
+
+```text
+tau_coding  →  tau_agent  →  tau_ai
+```
+
+Each layer has a single job and can be read (and used) independently:
+
+<CardGroup cols={3}>
+  <Card title="tau_ai" icon="cloud">
+    Translates model providers — OpenAI, Anthropic, OpenRouter, Hugging Face, and any OpenAI-compatible endpoint — into Tau's typed, provider-neutral event stream. Raw API wire formats never leak into outer layers.
+  </Card>
+  <Card title="tau_agent" icon="brain">
+    The portable agent brain. Owns `AgentHarness`, the agent loop, typed messages, the event stream, tool definitions, and JSONL session primitives. No dependency on Textual, Rich, CLI frameworks, or Tau's file layout — this package can be used standalone.
+  </Card>
+  <Card title="tau_coding" icon="code">
+    The coding application. Wraps the brain with a Typer CLI, Textual TUI, file and shell tools, provider configuration, project instructions, skills, slash commands, rendering, and on-disk session management.
+  </Card>
+</CardGroup>
+
+The key architectural boundary is:
+
+```text
+AgentHarness  = reusable brain            (tau_agent)
+CodingSession = coding-agent environment  (tau_coding)
+TUI           = one possible frontend     (tau_coding)
+```
+
+The core packages (`tau_ai`, `tau_agent`) have no knowledge of Textual, Rich, local config paths, slash commands, or rendering. Every frontend — the built-in TUI, print mode, or one you build yourself — is a consumer of the typed event stream.
+
+## The agent loop
+
+When you send a prompt, Tau runs an **agent loop**: it sends your message to the model, streams the response, and when the model requests a tool call, Tau executes the tool, feeds the result back, and asks the model to continue — repeating until the model has nothing left to do.
+
+```text
+User prompt
+    ↓
+Model response (streamed)
+    ↓
+Tool call requested?  ──yes──▶  Execute tool  ──▶  Feed result back
+    │                                                       │
+   no                                                  (loop again)
+    ↓
+Agent done
+```
+
+The loop lives in `tau_agent.loop.run_agent_loop` and is entirely independent of the frontend. `AgentHarness` wraps the loop with state management, message history, and event fan-out.
+
+## The event stream
+
+**Events are the contract** between the agent core and everything that consumes it. Instead of rendering UI directly, the agent emits a typed stream of `AgentEvent` values. Every frontend — TUI, print mode, JSON output, a custom renderer — subscribes to the same stream.
+
+The full set of event types exported from `tau_agent`:
+
+```python
+from tau_agent import (
+    AgentStartEvent,       # agent run begins
+    AgentEndEvent,         # agent run finishes (carries final messages)
+    TurnStartEvent,        # one model turn begins
+    TurnEndEvent,          # one model turn ends (carries assistant message + tool results)
+    MessageStartEvent,     # a message begins streaming
+    MessageUpdateEvent,    # incremental streaming delta
+    MessageEndEvent,       # message complete
+    ToolExecutionStartEvent,   # tool call begins
+    ToolExecutionUpdateEvent,  # tool partial result (progress)
+    ToolExecutionEndEvent,     # tool call complete (carries result + is_error)
+)
+```
+
+This design means the same `AgentHarness` can drive the built-in TUI, non-interactive print mode, or any frontend you write — without touching core logic.
+
+## AgentHarness — using Tau as a library
+
+`AgentHarness` is the portable, reusable agent brain in `tau_agent`. It is entirely independent of the CLI, TUI, and file layout — you can import it directly and drive it from your own code.
+
+Here is a complete working example from the README:
+
+```python
+from tau_agent import AgentHarness, AgentHarnessConfig
+
+harness = AgentHarness(
+    AgentHarnessConfig(
+        provider=provider,       # a ModelProvider from tau_ai
+        model="my-model",
+        system="You are a helpful coding agent.",
+        tools=tools,             # list[AgentTool]
+    )
+)
+
+async for event in harness.prompt("Explain this package"):
+    print(event)
+```
+
+`AgentHarnessConfig` fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | `ModelProvider` | A provider instance from `tau_ai` |
+| `model` | `str` | Model name to request |
+| `system` | `str` | System prompt |
+| `tools` | `list[AgentTool]` | Tools available to the model |
+| `max_turns` | `int \| None` | Limit agent loop iterations |
+| `queue_mode` | `"one_at_a_time" \| "all"` | How queued messages are consumed |
+| `session_id` | `str \| None` | Optional session correlation id |
+| `before_tool_call` | `BeforeToolCall \| None` | Hook called before each tool execution |
+| `after_tool_call` | `AfterToolCall \| None` | Hook called after each tool execution |
+
+The harness exposes additional control methods:
+
+```python
+# Cancel the running turn
+harness.cancel()
+
+# Queue a message to steer the agent mid-run
+harness.steer("focus on the authentication module")
+
+# Queue a follow-up for after the current run finishes
+harness.follow_up("also add type annotations")
+
+# Subscribe a push listener to all events
+unsubscribe = harness.subscribe(my_async_listener)
+```
+
+<Note>
+  `AgentHarness` manages message history internally. Each call to `harness.prompt()` appends to the ongoing conversation — you get a persistent, stateful agent, not a stateless one-shot call.
+</Note>
+
+## Sessions
+
+A **session** is one ongoing conversation plus everything the agent did in it. Sessions are Tau's durability primitive.
+
+### Storage format
+
+Sessions are stored as **append-only JSONL files** under `~/.tau/sessions/`. Each line is a typed `SessionEntry` — a discriminated union of entry kinds:
+
+```python
+from tau_agent import (
+    SessionInfoEntry,        # session metadata (id, model, provider, cwd)
+    MessageEntry,            # a user/assistant/tool message
+    ModelChangeEntry,        # model was switched mid-session
+    ThinkingLevelChangeEntry,# thinking mode was changed
+    CompactionEntry,         # context was compacted (carries summary)
+    BranchSummaryEntry,      # branch point recorded
+    LabelEntry,              # user-applied label
+    CustomEntry,             # extension-owned structured data
+    LeafEntry,               # branch leaf pointer
+)
+```
+
+The file grows monotonically — nothing is ever rewritten. Active context is managed separately from the durable record.
+
+### Resume, branching, and export
+
+Because session history is an immutable tree:
+
+- **Resume**: reload a past session and continue the conversation exactly where it left off.
+- **Branch**: pick any earlier point in the tree and start a new path from there — explore a different approach without losing the original.
+- **Export**: serialize a session to HTML or JSONL for sharing or archiving.
+
+```bash
+# List sessions for the current directory
+tau sessions
+
+# Resume a session in the TUI
+tau --session <session-id>
+
+# Export a session to HTML
+tau export <session-id>
+```
+
+From inside the TUI, use `/resume` to open the session picker and `/export` to export the current session.
+
+## Tools
+
+**Tools** are the actions the agent can take in your project. In `tau_agent`, a tool is an `AgentTool` dataclass — a schema plus an async executor:
+
+```python
+from tau_agent import AgentTool, AgentToolResult
+
+@dataclass(frozen=True, slots=True)
+class AgentTool:
+    name: str
+    label: str
+    description: str
+    parameters: Mapping[str, JSONValue]   # JSON Schema for arguments
+    execute_fn: ToolExecutor              # async callable
+    prompt_snippet: str | None = None     # injected into system prompt
+    prompt_guidelines: tuple[str, ...] = ()
+    execution_mode: ToolExecutionMode = "parallel"  # "sequential" | "parallel"
+    render_call: ToolCallRenderer | None = None
+    render_result: ToolResultRenderer | None = None
+```
+
+Tau's four built-in coding tools (defined in `tau_coding`):
+
+<CardGroup cols={2}>
+  <Card title="read" icon="file">
+    Read a file from the working directory. Returns file contents as text. Supports partial reads for large files.
+  </Card>
+  <Card title="write" icon="file-pen">
+    Write or create a file at a given path. Streams progress as it writes. Creates parent directories automatically.
+  </Card>
+  <Card title="edit" icon="file-code">
+    Apply a targeted find-and-replace edit to a file. Safer than a full rewrite — the model specifies exact strings to replace.
+  </Card>
+  <Card title="bash" icon="terminal">
+    Execute a shell command in the working directory. Returns stdout, stderr, and exit code. Runs in the project's shell environment.
+  </Card>
+</CardGroup>
+
+The model decides when to call tools; Tau executes them in the configured working directory and streams results back through the event system. Extensions can register additional tools with `tau.register_tool(tool)`.
+
+## Extensions
+
+Extensions are Python modules or packages that hook into Tau's runtime to add tools, slash commands, event listeners, and custom message renderers. They are loaded at startup via `--extension` or from a directory Tau discovers automatically.
+
+Each extension receives an `ExtensionAPI` object (the `tau` parameter in `setup()`) that exposes the full host API:
+
+```python
+# my_extension.py
+
+def setup(tau):
+    """Called once when the extension loads."""
+
+    # Register a custom tool
+    tau.register_tool(my_tool)
+
+    # Register a slash command
+    tau.register_command("greet", handle_greet, description="Say hello")
+
+    # Subscribe to agent events
+    @tau.on("turn_end")
+    def on_turn_end(event, context):
+        print(f"Turn ended. Model: {context.model}")
+
+    # Subscribe to lifecycle events
+    @tau.on("session_start")
+    def on_session_start(event, context):
+        tau.notify(f"Session started in {context.cwd}")
+```
+
+The `ExtensionAPI` provides:
+
+| Method | Description |
+|--------|-------------|
+| `tau.register_tool(tool)` | Add an `AgentTool` available to the model |
+| `tau.register_command(name, handler, ...)` | Add a `/name` slash command |
+| `tau.on(event, handler)` | Subscribe to an agent or lifecycle event |
+| `tau.add_prompt_guideline(text)` | Inject a guideline into the system prompt |
+| `tau.send_user_message(content)` | Queue a user message for the next run |
+| `tau.notify(message, level)` | Show a notification in the UI |
+| `tau.context` | Read-only session context (`cwd`, `model`, `provider_name`, …) |
+
+<Warning>
+  The `tau` API object is scoped to one load generation. After a `/reload`, any `tau` reference captured by the previous instance raises `ExtensionError` — this prevents stale handlers from acting against the reloaded world.
+</Warning>
+
+## Project instructions
+
+Tau automatically discovers and injects **`AGENTS.md`** files from your project directory and its parents, as well as `.tau/` and `.agents/` resource directories. These files let you give the agent standing instructions about your project — conventions, test commands, gotchas — without repeating them in every prompt.
+
+## Skills and prompt templates
+
+**Skills** are Markdown files describing how to do a specific task; invoke one with `/skill:<name>`. **Prompt templates** are reusable prompts with optional variables, triggered by name instead of retyping. Both can live at the user level (`~/.tau/`) or per-project (`.tau/`).
+
+## Two interfaces
+
+Tau always runs one of two modes:
+
+- **Interactive TUI** (default): the full Textual terminal UI with streaming output, keyboard shortcuts, and session management.
+- **Print mode** (`-p` / `--mode`): a single non-interactive prompt — output goes to stdout, making it composable with scripts and pipes.
+
+Both modes run the same `CodingSession` and share the same session storage. A session started in print mode can be resumed in the TUI, and vice versa.
+
+## Where to go deeper
+
+<CardGroup cols={2}>
+  <Card title="Architecture internals" icon="diagram-project" href="/internals/architecture">
+    A detailed walkthrough of how the three layers are wired together, including the provider adapter, loop mechanics, and session tree.
+  </Card>
+  <Card title="The agent loop & events" icon="rotate" href="/internals/agent-loop">
+    Step-by-step explanation of the agent loop, how events are emitted, and how frontends subscribe.
+  </Card>
+  <Card title="Extensions guide" icon="puzzle-piece" href="/guides/extensions">
+    Build and load your own tools, commands, and event listeners using the extensions API.
+  </Card>
+  <Card title="Sessions guide" icon="clock-rotate-left" href="/guides/sessions">
+    Manage, resume, branch, and export durable JSONL sessions.
+  </Card>
+</CardGroup>
